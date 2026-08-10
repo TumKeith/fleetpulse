@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FleetPulse - Enterprise IT Control Plane</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0b1329; color: #f8fafc; font-family: 'Segoe UI', sans-serif; }
+        .glass-card { background: rgba(23, 32, 54, 0.85); backdrop-filter: blur(10px); border: 1px solid rgba(51, 65, 85, 0.6); }
+        .pulse-red { box-shadow: 0 0 8px #ef4444; }
+        .pulse-amber { box-shadow: 0 0 8px #f59e0b; }
+        .pulse-green { box-shadow: 0 0 8px #10b981; }
+        .pulse-purple { box-shadow: 0 0 8px #a855f7; }
+    </style>
+</head>
+<body class="p-6">
+    <!-- Header -->
+    <header class="flex justify-between items-center pb-6 mb-6 border-b border-slate-800">
+        <div>
+            <h1 class="text-2xl font-bold text-sky-400">FLEET<span class="text-slate-100">PULSE</span> CONTROL PLANE</h1>
+            <p class="text-xs text-slate-400">Compact Fleet Triage • Remote Remediation • Active Directory Integration</p>
+        </div>
+        <div class="flex space-x-3">
+            <button onclick="populateMockFleet()" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded border border-slate-700 transition">⚡ Reset / Load Mock Fleet</button>
+            <button onclick="fetchFleetData(true)" class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-xs font-semibold rounded text-white transition flex items-center space-x-1">
+                <span id="refresh-icon">↻</span> <span>Refresh Status</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- 1. CRITICAL ZONE -->
+    <section class="mb-6">
+        <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-bold text-rose-400 flex items-center space-x-2">
+                <span>🚨 Priority 1: Critical Issues (Immediate Action Required)</span>
+            </h2>
+            <span id="critical-count" class="text-xs bg-rose-950 text-rose-300 px-2.5 py-0.5 rounded-full border border-rose-800 font-bold">0 Machines</span>
+        </div>
+        <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3 divide-y divide-slate-800/80" id="critical-list">
+            <div class="text-slate-500 text-xs italic p-2">Loading critical items...</div>
+        </div>
+    </section>
+
+    <!-- 2. WARNING ZONE -->
+    <section class="mb-6">
+        <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-bold text-amber-400 flex items-center space-x-2">
+                <span>⚠️ Priority 2: Warnings & Pending Updates</span>
+            </h2>
+            <span id="warning-count" class="text-xs bg-amber-950 text-amber-300 px-2.5 py-0.5 rounded-full border border-amber-800 font-bold">0 Machines</span>
+        </div>
+        <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3 divide-y divide-slate-800/80" id="warning-list">
+            <div class="text-slate-500 text-xs italic p-2">Loading warning items...</div>
+        </div>
+    </section>
+
+    <!-- 3. OFFLINE NETWORK DROPS ONLY -->
+    <section class="mb-6">
+        <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-bold text-purple-400 flex items-center space-x-2">
+                <span>📡 Network Outages & Active Connection Drops</span>
+            </h2>
+            <span id="offline-count" class="text-xs bg-purple-950 text-purple-300 px-2.5 py-0.5 rounded-full border border-purple-800 font-bold">0 Machines</span>
+        </div>
+        <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3 divide-y divide-slate-800/80" id="offline-list">
+            <div class="text-slate-500 text-xs italic p-2">Loading network outages...</div>
+        </div>
+    </section>
+
+    <!-- 4. HEALTHY FLEET ZONE -->
+    <section>
+        <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-bold text-emerald-400 flex items-center space-x-2">
+                <span>🟢 Healthy Fleet (Compliant & Operating Normally)</span>
+            </h2>
+            <span id="healthy-count" class="text-xs bg-emerald-950 text-emerald-300 px-2.5 py-0.5 rounded-full border border-emerald-800 font-bold">0 Machines</span>
+        </div>
+        <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-3 divide-y divide-slate-800/60" id="healthy-list">
+            <div class="text-slate-500 text-xs italic p-2">Loading compliant hosts...</div>
+        </div>
+    </section>
+
+    <!-- ACTION & REMEDIATION MODAL -->
+    <div id="action-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center hidden z-50 p-4">
+        <div class="glass-card rounded-xl max-w-lg w-full p-6 border border-slate-700 shadow-2xl">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-3 mb-4">
+                <div>
+                    <h3 id="modal-hostname" class="text-lg font-bold text-sky-400">PC Remediate</h3>
+                    <p id="modal-ip" class="text-xs text-slate-400 font-mono"></p>
+                </div>
+                <button onclick="closeModal()" class="text-slate-400 hover:text-white font-bold">&times;</button>
+            </div>
+            
+            <div id="modal-alert" class="hidden mb-3 p-2 bg-emerald-950 border border-emerald-700 text-emerald-300 text-xs rounded text-center font-bold"></div>
+            <div id="modal-body" class="space-y-4 text-sm text-slate-300"></div>
+
+            <div class="mt-6 flex justify-end space-x-3">
+                <button onclick="closeModal()" class="px-4 py-2 bg-slate-800 text-slate-300 text-xs rounded">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function fetchFleetData(showFeedback = false) {
+            if (showFeedback) {
+                document.getElementById('refresh-icon').classList.add('animate-spin');
+            }
+
+            const res = await fetch('/api/fleet/devices');
+            const data = await res.json();
+
+            if (showFeedback) {
+                setTimeout(() => document.getElementById('refresh-icon').classList.remove('animate-spin'), 600);
+            }
+            
+            const criticalList = document.getElementById('critical-list');
+            const warningList = document.getElementById('warning-list');
+            const offlineList = document.getElementById('offline-list');
+            const healthyList = document.getElementById('healthy-list');
+            
+            criticalList.innerHTML = '';
+            warningList.innerHTML = '';
+            offlineList.innerHTML = '';
+            healthyList.innerHTML = '';
+
+            const criticals = data.devices.filter(d => d.status === 'RED');
+            const warnings = data.devices.filter(d => d.status === 'AMBER');
+            // EXCLUSIVELY filters unexpected network drops (ignoring graceful shutdowns)
+            const networkDrops = data.devices.filter(d => d.status === 'OFFLINE_NETWORK_DROP');
+            const healthies = data.devices.filter(d => d.status === 'GREEN');
+
+            document.getElementById('critical-count').innerText = `${criticals.length} Machines`;
+            document.getElementById('warning-count').innerText = `${warnings.length} Machines`;
+            document.getElementById('offline-count').innerText = `${networkDrops.length} Machines`;
+            document.getElementById('healthy-count').innerText = `${healthies.length} Machines`;
+
+            // 1. CRITICAL
+            if (criticals.length === 0) {
+                criticalList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">Zero critical machines detected.</div>`;
+            } else {
+                criticals.forEach(dev => criticalList.innerHTML += renderRow(dev, 'rose', 'CRITICAL / LAG', 'pulse-red'));
+            }
+
+            // 2. WARNING
+            if (warnings.length === 0) {
+                warningList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">No warning items pending.</div>`;
+            } else {
+                warnings.forEach(dev => warningList.innerHTML += renderRow(dev, 'amber', 'UPDATES PENDING', 'pulse-amber'));
+            }
+
+            // 3. OFFLINE NETWORK DROPS ONLY
+            if (networkDrops.length === 0) {
+                offlineList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">All active machines communicating cleanly over the network.</div>`;
+            } else {
+                networkDrops.forEach(dev => {
+                    offlineList.innerHTML += renderRow(dev, 'purple', '📡 NETWORK OUTAGE / UNEXPECTED DROP', 'pulse-purple');
+                });
+            }
+
+            // 4. HEALTHY
+            if (healthies.length === 0) {
+                healthyList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">No compliant machines connected.</div>`;
+            } else {
+                healthies.forEach(dev => healthyList.innerHTML += renderRow(dev, 'emerald', '100% Compliant', 'pulse-green'));
+            }
+        }
+
+        function renderRow(dev, color, labelText, pulseClass) {
+            let badgeStyle = '';
+            if (color === 'rose') badgeStyle = 'bg-rose-950 text-rose-300 border-rose-800';
+            else if (color === 'amber') badgeStyle = 'bg-amber-950 text-amber-300 border-amber-800';
+            else if (color === 'purple') badgeStyle = 'bg-purple-950 text-purple-300 border-purple-800';
+            else if (color === 'emerald') badgeStyle = 'bg-emerald-950 text-emerald-300 border-emerald-800';
+            else badgeStyle = 'bg-slate-800 text-slate-400 border-slate-700';
+
+            let dotColor = 'bg-slate-500';
+            if (color === 'rose') dotColor = 'bg-rose-500';
+            if (color === 'amber') dotColor = 'bg-amber-500';
+            if (color === 'purple') dotColor = 'bg-purple-500';
+            if (color === 'emerald') dotColor = 'bg-emerald-500';
+
+            return `
+                <div onclick='openActionModal(${JSON.stringify(dev)})' class="flex justify-between items-center py-2.5 px-3 hover:bg-slate-800/60 rounded-lg cursor-pointer transition text-xs">
+                    <div class="flex items-center space-x-3">
+                        <span class="w-2.5 h-2.5 rounded-full ${dotColor} ${pulseClass}"></span>
+                        <span class="font-bold text-slate-100">${dev.hostname}</span>
+                        <span class="text-sky-400 font-mono">(${dev.ip_address})</span>
+                        <span class="text-slate-400">• ${dev.user_details.full_name} (${dev.user_details.department})</span>
+                    </div>
+                    <div class="flex items-center space-x-3">
+                        <span class="px-2 py-0.5 rounded border text-[11px] font-bold ${badgeStyle}">${labelText}</span>
+                        <span class="text-slate-400">Ext: ${dev.user_details.phone_ext}</span>
+                        <span class="text-sky-400 hover:text-sky-300 font-semibold">Inspect ➔</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function populateMockFleet() {
+            await fetch('/api/demo/populate-mock', { method: 'POST' });
+            fetchFleetData();
+        }
+
+        async function remediateHost(hostname) {
+            const res = await fetch(`/api/admin/remediate/${hostname}`, { method: 'POST' });
+            const data = await res.json();
+            
+            const alert = document.getElementById('modal-alert');
+            alert.classList.remove('hidden');
+            alert.innerText = `[REMEDIATED] ${hostname} marked as Healthy and moved to Compliant Fleet!`;
+            
+            setTimeout(() => {
+                closeModal();
+                fetchFleetData();
+            }, 1200);
+        }
+
+        async function triggerCommand(hostname, command) {
+            const res = await fetch('/api/admin/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ hostname: hostname, command: command })
+            });
+            const alert = document.getElementById('modal-alert');
+            alert.classList.remove('hidden');
+            alert.innerText = `[QUEUED] Command '${command}' dispatched to ${hostname}...`;
+            setTimeout(() => checkCommandFeedback(hostname), 3000);
+        }
+
+        async function checkCommandFeedback(hostname) {
+            const res = await fetch(`/api/admin/command-result/${hostname}`);
+            const data = await res.json();
+            if (data.results && data.results.length > 0) {
+                const latest = data.results[0];
+                const alert = document.getElementById('modal-alert');
+                alert.classList.remove('hidden');
+                alert.innerText = `[EXECUTED] ${latest.command}: ${latest.output}`;
+            }
+        }
+
+        async function launchRDPSession(ipAddress) {
+            const res = await fetch('/api/admin/launch-rdp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip: ipAddress })
+            });
+            const data = await res.json();
+            const alert = document.getElementById('modal-alert');
+            alert.classList.remove('hidden');
+            if (data.status === 'SUCCESS') {
+                alert.innerText = `[RDP LAUNCHED] Opening mstsc.exe session to ${ipAddress}...`;
+            } else {
+                alert.innerText = `[RDP ERROR] ${data.message}`;
+            }
+        }
+
+        function openActionModal(dev) {
+            document.getElementById('action-modal').classList.remove('hidden');
+            document.getElementById('modal-alert').classList.add('hidden');
+            document.getElementById('modal-hostname').innerText = `${dev.hostname} (${dev.user_details.full_name})`;
+            document.getElementById('modal-ip').innerText = `Target IP Address: ${dev.ip_address}`;
+            
+            const body = document.getElementById('modal-body');
+            body.innerHTML = `
+                <div class="p-3 bg-slate-900 rounded-lg space-y-1.5 text-xs border border-slate-800">
+                    <div class="font-bold text-sky-400">System & Hardware Specs</div>
+                    <div>• OS Build: ${dev.os_info.product_name} ${dev.os_info.display_version} (Build ${dev.os_info.build_number})</div>
+                    <div>• Pending Updates: <span class="${dev.update_info.pending_updates_count > 5 ? 'text-rose-400 font-bold' : 'text-amber-300'}">${dev.update_info.pending_updates_count} updates</span></div>
+                    <div>• Free Disk Space: <span class="${dev.hardware_info.free_disk_gb < 10 ? 'text-rose-400 font-bold' : 'text-slate-300'}">${dev.hardware_info.free_disk_gb} GB</span></div>
+                </div>
+
+                <div class="p-3 bg-slate-900 rounded-lg space-y-1.5 text-xs border border-slate-800">
+                    <div class="font-bold text-sky-400">Active Directory Profile</div>
+                    <div>• Email: <a href="mailto:${dev.user_details.email}" class="text-sky-300 underline">${dev.user_details.email}</a></div>
+                    <div>• IP Phone Extension: <span class="text-emerald-400 font-mono font-bold">${dev.user_details.phone_ext}</span></div>
+                    <div>• Department: ${dev.user_details.department}</div>
+                </div>
+
+                <div class="p-3 bg-slate-900 rounded-lg space-y-2 text-xs border border-slate-800">
+                    <div class="font-bold text-sky-400 mb-1">Instant IT Remediation Commands</div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button onclick="triggerCommand('${dev.hostname}', 'FLUSH_DNS')" class="p-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded border border-slate-700 transition">🧹 Flush DNS Cache</button>
+                        <button onclick="triggerCommand('${dev.hostname}', 'RESTART_WUAUSERV')" class="p-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded border border-slate-700 transition">🔄 Restart WU Service</button>
+                        <button onclick="triggerCommand('${dev.hostname}', 'CHECK_UPDATES')" class="p-2 bg-sky-900 hover:bg-sky-800 text-sky-200 text-xs font-semibold rounded border border-sky-700 col-span-2 transition">🚀 Force Windows Update Scan</button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2 pt-1">
+                    <button onclick="launchRDPSession('${dev.ip_address}')" class="py-2.5 bg-emerald-800 hover:bg-emerald-700 text-white font-bold text-xs rounded border border-emerald-600 transition flex items-center justify-center space-x-1">
+                        <span>🖥️ RDP Session</span>
+                    </button>
+                    <button onclick="remediateHost('${dev.hostname}')" class="py-2.5 bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs rounded border border-sky-400 transition flex items-center justify-center space-x-1">
+                        <span>✅ Mark Remediated</span>
+                    </button>
+                </div>
+            `;
+        }
+
+        function closeModal() {
+            document.getElementById('action-modal').classList.add('hidden');
+        }
+
+        fetchFleetData();
+        setInterval(fetchFleetData, 5000);
+    </script>
+</body>
+</html>
