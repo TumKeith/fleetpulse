@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FleetPulse - Enterprise IT Control Plane</title>
+    <title>FleetPulse - Enterprise IT Dispatch & Control Plane</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { background-color: #0b1329; color: #f8fafc; font-family: 'Segoe UI', sans-serif; }
@@ -18,8 +18,8 @@
     <!-- Header -->
     <header class="flex justify-between items-center pb-6 mb-6 border-b border-slate-800">
         <div>
-            <h1 class="text-2xl font-bold text-sky-400">FLEET<span class="text-slate-100">PULSE</span> CONTROL PLANE</h1>
-            <p class="text-xs text-slate-400">Compact Fleet Triage • Remote Remediation • Active Directory Integration</p>
+            <h1 class="text-2xl font-bold text-sky-400">FLEET<span class="text-slate-100">PULSE</span> IT DISPATCH PLANE</h1>
+            <p class="text-xs text-slate-400">Workload Distribution • Technician Shift Management • Remote Remediation</p>
         </div>
         <div class="flex space-x-3">
             <button onclick="populateMockFleet()" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded border border-slate-700 transition">⚡ Reset / Load Mock Fleet</button>
@@ -28,6 +28,25 @@
             </button>
         </div>
     </header>
+
+    <!-- TECHNICIAN SHIFT & ROSTER BAR -->
+    <section class="mb-6 glass-card p-4 rounded-xl border border-slate-800">
+        <div class="flex justify-between items-center mb-3">
+            <h2 class="text-xs font-bold text-sky-400 uppercase tracking-wider flex items-center space-x-2">
+                <span>👥 Technician Roster & Shift Status</span>
+            </h2>
+            <div class="flex items-center space-x-2 text-xs">
+                <span class="text-slate-400">Filter View by Tech:</span>
+                <select id="tech-filter" onchange="fetchFleetData()" class="bg-slate-900 text-sky-300 border border-slate-700 rounded px-2 py-1 font-bold">
+                    <option value="ALL">🌐 All Technicians (Global View)</option>
+                    <!-- Populated via JS -->
+                </select>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4" id="tech-roster-grid">
+            <div class="text-slate-500 text-xs italic">Loading technician shift roster...</div>
+        </div>
+    </section>
 
     <!-- 1. CRITICAL ZONE -->
     <section class="mb-6">
@@ -55,7 +74,7 @@
         </div>
     </section>
 
-    <!-- 3. OFFLINE NETWORK DROPS ONLY -->
+    <!-- 3. OFFLINE NETWORK DROPS -->
     <section class="mb-6">
         <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-bold text-purple-400 flex items-center space-x-2">
@@ -102,10 +121,64 @@
     </div>
 
     <script>
+        let GLOBAL_TECHS = [];
+
+        async function fetchTechRoster() {
+            const res = await fetch('/api/techs');
+            const data = await res.json();
+            GLOBAL_TECHS = data.techs;
+
+            const grid = document.getElementById('tech-roster-grid');
+            const filterSelect = document.getElementById('tech-filter');
+            
+            // Retain selected filter
+            const currentSelected = filterSelect.value;
+            filterSelect.innerHTML = '<option value="ALL">🌐 All Technicians (Global View)</option>';
+
+            grid.innerHTML = '';
+            GLOBAL_TECHS.forEach(tech => {
+                filterSelect.innerHTML += `<option value="${tech.name}" ${currentSelected === tech.name ? 'selected' : ''}>🛠️ ${tech.name} (${tech.status.replace('_', ' ')})</option>`;
+
+                let statusBadge = '';
+                if (tech.status === 'ON_DUTY') statusBadge = '<span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 font-bold">ON DUTY</span>';
+                else if (tech.status === 'OFF_DUTY') statusBadge = '<span class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 font-bold">OFF DUTY</span>';
+                else statusBadge = '<span class="px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800 font-bold">ON LEAVE</span>';
+
+                grid.innerHTML += `
+                    <div class="bg-slate-900/80 p-3 rounded-lg border border-slate-800 flex justify-between items-center text-xs">
+                        <div>
+                            <div class="font-bold text-slate-200">${tech.name}</div>
+                            <div class="text-[11px] text-slate-400">${tech.role}</div>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            ${statusBadge}
+                            <select onchange="updateTechDuty('${tech.id}', this.value)" class="bg-slate-800 text-slate-300 border border-slate-700 rounded text-[11px] px-1 py-0.5">
+                                <option value="ON_DUTY" ${tech.status === 'ON_DUTY' ? 'selected' : ''}>On Duty</option>
+                                <option value="OFF_DUTY" ${tech.status === 'OFF_DUTY' ? 'selected' : ''}>Off Duty</option>
+                                <option value="ON_LEAVE" ${tech.status === 'ON_LEAVE' ? 'selected' : ''}>On Leave</option>
+                            </select>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        async function updateTechDuty(techId, newStatus) {
+            await fetch(`/api/techs/duty/${techId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: newStatus })
+            });
+            await fetchTechRoster();
+            fetchFleetData();
+        }
+
         async function fetchFleetData(showFeedback = false) {
             if (showFeedback) {
                 document.getElementById('refresh-icon').classList.add('animate-spin');
             }
+
+            await fetchTechRoster();
 
             const res = await fetch('/api/fleet/devices');
             const data = await res.json();
@@ -114,6 +187,14 @@
                 setTimeout(() => document.getElementById('refresh-icon').classList.remove('animate-spin'), 600);
             }
             
+            const selectedFilter = document.getElementById('tech-filter').value;
+            let devices = data.devices;
+
+            // Apply Technician Filter if selected
+            if (selectedFilter !== 'ALL') {
+                devices = devices.filter(d => d.assigned_tech === selectedFilter);
+            }
+
             const criticalList = document.getElementById('critical-list');
             const warningList = document.getElementById('warning-list');
             const offlineList = document.getElementById('offline-list');
@@ -124,46 +205,27 @@
             offlineList.innerHTML = '';
             healthyList.innerHTML = '';
 
-            const criticals = data.devices.filter(d => d.status === 'RED');
-            const warnings = data.devices.filter(d => d.status === 'AMBER');
-            // EXCLUSIVELY filters unexpected network drops (ignoring graceful shutdowns)
-            const networkDrops = data.devices.filter(d => d.status === 'OFFLINE_NETWORK_DROP');
-            const healthies = data.devices.filter(d => d.status === 'GREEN');
+            const criticals = devices.filter(d => d.status === 'RED');
+            const warnings = devices.filter(d => d.status === 'AMBER');
+            const networkDrops = devices.filter(d => d.status === 'OFFLINE_NETWORK_DROP');
+            const healthies = devices.filter(d => d.status === 'GREEN');
 
             document.getElementById('critical-count').innerText = `${criticals.length} Machines`;
             document.getElementById('warning-count').innerText = `${warnings.length} Machines`;
             document.getElementById('offline-count').innerText = `${networkDrops.length} Machines`;
             document.getElementById('healthy-count').innerText = `${healthies.length} Machines`;
 
-            // 1. CRITICAL
-            if (criticals.length === 0) {
-                criticalList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">Zero critical machines detected.</div>`;
-            } else {
-                criticals.forEach(dev => criticalList.innerHTML += renderRow(dev, 'rose', 'CRITICAL / LAG', 'pulse-red'));
-            }
+            if (criticals.length === 0) criticalList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">Zero critical machines detected.</div>`;
+            else criticals.forEach(dev => criticalList.innerHTML += renderRow(dev, 'rose', 'CRITICAL / LAG', 'pulse-red'));
 
-            // 2. WARNING
-            if (warnings.length === 0) {
-                warningList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">No warning items pending.</div>`;
-            } else {
-                warnings.forEach(dev => warningList.innerHTML += renderRow(dev, 'amber', 'UPDATES PENDING', 'pulse-amber'));
-            }
+            if (warnings.length === 0) warningList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">No warning items pending.</div>`;
+            else warnings.forEach(dev => warningList.innerHTML += renderRow(dev, 'amber', 'UPDATES PENDING', 'pulse-amber'));
 
-            // 3. OFFLINE NETWORK DROPS ONLY
-            if (networkDrops.length === 0) {
-                offlineList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">All active machines communicating cleanly over the network.</div>`;
-            } else {
-                networkDrops.forEach(dev => {
-                    offlineList.innerHTML += renderRow(dev, 'purple', '📡 NETWORK OUTAGE / UNEXPECTED DROP', 'pulse-purple');
-                });
-            }
+            if (networkDrops.length === 0) offlineList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">All active machines communicating cleanly over the network.</div>`;
+            else networkDrops.forEach(dev => offlineList.innerHTML += renderRow(dev, 'purple', '📡 NETWORK OUTAGE / UNEXPECTED DROP', 'pulse-purple'));
 
-            // 4. HEALTHY
-            if (healthies.length === 0) {
-                healthyList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">No compliant machines connected.</div>`;
-            } else {
-                healthies.forEach(dev => healthyList.innerHTML += renderRow(dev, 'emerald', '100% Compliant', 'pulse-green'));
-            }
+            if (healthies.length === 0) healthyList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">No compliant machines connected.</div>`;
+            else healthies.forEach(dev => healthyList.innerHTML += renderRow(dev, 'emerald', '100% Compliant', 'pulse-green'));
         }
 
         function renderRow(dev, color, labelText, pulseClass) {
@@ -189,6 +251,7 @@
                         <span class="text-slate-400">• ${dev.user_details.full_name} (${dev.user_details.department})</span>
                     </div>
                     <div class="flex items-center space-x-3">
+                        <span class="text-slate-400">Assigned: <strong class="text-sky-300">${dev.assigned_tech || 'Unassigned'}</strong></span>
                         <span class="px-2 py-0.5 rounded border text-[11px] font-bold ${badgeStyle}">${labelText}</span>
                         <span class="text-slate-400">Ext: ${dev.user_details.phone_ext}</span>
                         <span class="text-sky-400 hover:text-sky-300 font-semibold">Inspect ➔</span>
@@ -202,14 +265,23 @@
             fetchFleetData();
         }
 
+        async function reassignMachine(hostname, newTech) {
+            await fetch('/api/admin/reassign', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ hostname: hostname, tech_name: newTech })
+            });
+            const alert = document.getElementById('modal-alert');
+            alert.classList.remove('hidden');
+            alert.innerText = `[REASSIGNED] ${hostname} assigned to ${newTech}!`;
+            setTimeout(() => fetchFleetData(), 800);
+        }
+
         async function remediateHost(hostname) {
             const res = await fetch(`/api/admin/remediate/${hostname}`, { method: 'POST' });
-            const data = await res.json();
-            
             const alert = document.getElementById('modal-alert');
             alert.classList.remove('hidden');
             alert.innerText = `[REMEDIATED] ${hostname} marked as Healthy and moved to Compliant Fleet!`;
-            
             setTimeout(() => {
                 closeModal();
                 fetchFleetData();
@@ -248,11 +320,8 @@
             const data = await res.json();
             const alert = document.getElementById('modal-alert');
             alert.classList.remove('hidden');
-            if (data.status === 'SUCCESS') {
-                alert.innerText = `[RDP LAUNCHED] Opening mstsc.exe session to ${ipAddress}...`;
-            } else {
-                alert.innerText = `[RDP ERROR] ${data.message}`;
-            }
+            if (data.status === 'SUCCESS') alert.innerText = `[RDP LAUNCHED] Opening mstsc.exe session to ${ipAddress}...`;
+            else alert.innerText = `[RDP ERROR] ${data.message}`;
         }
 
         function openActionModal(dev) {
@@ -261,8 +330,26 @@
             document.getElementById('modal-hostname').innerText = `${dev.hostname} (${dev.user_details.full_name})`;
             document.getElementById('modal-ip').innerText = `Target IP Address: ${dev.ip_address}`;
             
+            const onDutyTechs = GLOBAL_TECHS.filter(t => t.status === 'ON_DUTY');
+            let techOptions = `<option value="Unassigned">Unassigned</option>`;
+            onDutyTechs.forEach(t => {
+                techOptions += `<option value="${t.name}" ${dev.assigned_tech === t.name ? 'selected' : ''}>${t.name}</option>`;
+            });
+
             const body = document.getElementById('modal-body');
             body.innerHTML = `
+                <div class="p-3 bg-slate-900 rounded-lg space-y-1.5 text-xs border border-slate-800">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="font-bold text-sky-400">Dispatch & Assignment</span>
+                        <div class="flex items-center space-x-2">
+                            <span class="text-slate-400">Assigned Tech:</span>
+                            <select onchange="reassignMachine('${dev.hostname}', this.value)" class="bg-slate-800 text-sky-300 border border-slate-700 rounded px-2 py-0.5 font-bold">
+                                ${techOptions}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="p-3 bg-slate-900 rounded-lg space-y-1.5 text-xs border border-slate-800">
                     <div class="font-bold text-sky-400">System & Hardware Specs</div>
                     <div>• OS Build: ${dev.os_info.product_name} ${dev.os_info.display_version} (Build ${dev.os_info.build_number})</div>

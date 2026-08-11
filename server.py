@@ -2,7 +2,7 @@
 """
 =============================================================================
  FLEETPULSE CENTRAL IT COMMAND SERVER
- Enterprise Fleet Health Monitoring, RDP Session Launcher & Command Engine
+ Multi-Technician Dispatch, Shift Tracking & Fleet Remediation Engine
 =============================================================================
 """
 
@@ -24,6 +24,7 @@ FLEET_DB: Dict[str, dict] = {}
 COMMAND_QUEUE: Dict[str, List[dict]] = {}
 COMMAND_RESULTS: Dict[str, List[dict]] = {}
 
+# Active Directory Mock Database
 MOCK_AD_DIRECTORY = {
     "admin": {"full_name": "System Administrator", "department": "IT Infrastructure", "email": "admin@company.com", "phone_ext": "4000"},
     "jdoe": {"full_name": "Jane Doe", "department": "Finance", "email": "jdoe@company.com", "phone_ext": "4401"},
@@ -32,6 +33,13 @@ MOCK_AD_DIRECTORY = {
     "cwilliams": {"full_name": "Claire Williams", "department": "Legal", "email": "cwilliams@company.com", "phone_ext": "4404"},
     "bmbatha": {"full_name": "Bernard Mbatha", "department": "Sales", "email": "bmbatha@company.com", "phone_ext": "4405"},
     "dchen": {"full_name": "David Chen", "department": "Logistics", "email": "dchen@company.com", "phone_ext": "4406"},
+}
+
+# Technician Roster & Duty Tracking
+TECHNICIANS_DB = {
+    "tech1": {"id": "tech1", "name": "Kevin Vance", "status": "ON_DUTY", "role": "Desktop Support"},
+    "tech2": {"id": "tech2", "name": "Sarah Connor", "status": "ON_DUTY", "role": "Network Engineer"},
+    "tech3": {"id": "tech3", "name": "David Miller", "status": "ON_LEAVE", "role": "Systems Admin"},
 }
 
 
@@ -43,7 +51,6 @@ def calculate_health_status(os_info: dict, update_info: dict, hw_info: dict, eve
     reboot_needed = update_info.get("reboot_required", False)
     free_disk_gb = hw_info.get("free_disk_gb", 100)
 
-    # Re-evaluates exact minimum thresholds on every heartbeat
     if free_disk_gb < 10 or pending_updates > 10:
         return "RED"
     if reboot_needed or pending_updates > 0:
@@ -51,9 +58,42 @@ def calculate_health_status(os_info: dict, update_info: dict, hw_info: dict, eve
     return "GREEN"
 
 
+def auto_assign_technician() -> str:
+    """Finds an ON_DUTY technician with the lightest workload."""
+    on_duty_techs = [t["name"] for t in TECHNICIANS_DB.values() if t["status"] == "ON_DUTY"]
+    if not on_duty_techs:
+        return "Unassigned (No Techs On Duty)"
+
+    # Count current active assignments per tech
+    counts = {tech: 0 for tech in on_duty_techs}
+    for dev in FLEET_DB.values():
+        assigned = dev.get("assigned_tech")
+        if assigned in counts and dev.get("status") in ["RED", "AMBER", "OFFLINE_NETWORK_DROP"]:
+            counts[assigned] += 1
+
+    # Return technician with minimum current workload
+    return min(counts, key=counts.get)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def render_dashboard(request: Request):
     return templates.TemplateResponse(request=request, name="dashboard.html")
+
+
+@app.get("/api/techs")
+async def get_technicians():
+    """Returns technician roster and duty states."""
+    return {"techs": list(TECHNICIANS_DB.values())}
+
+
+@app.post("/api/techs/duty/{tech_id}")
+async def toggle_tech_duty(tech_id: str, payload: dict):
+    """Toggles technician between ON_DUTY, OFF_DUTY, or ON_LEAVE."""
+    if tech_id in TECHNICIANS_DB:
+        new_status = payload.get("status", "ON_DUTY")
+        TECHNICIANS_DB[tech_id]["status"] = new_status
+        return {"status": "SUCCESS", "tech": TECHNICIANS_DB[tech_id]}
+    return JSONResponse({"status": "ERROR", "message": "Technician not found"}, status_code=404)
 
 
 @app.post("/api/telemetry/heartbeat")
@@ -67,13 +107,19 @@ async def receive_heartbeat(data: dict):
         {"full_name": username or "Unassigned", "department": "General", "email": f"{username}@company.com", "phone_ext": "N/A"}
     )
 
-    # Server re-calculates compliance automatically on heartbeat arrival
     status = calculate_health_status(
         data.get("os_info", {}),
         data.get("update_info", {}),
         data.get("hardware_info", {}),
         event_state
     )
+
+    # Preserve existing assigned tech or auto-assign if new/needing attention
+    existing_tech = FLEET_DB.get(hostname, {}).get("assigned_tech")
+    if not existing_tech or existing_tech.startswith("Unassigned"):
+        assigned_tech = auto_assign_technician() if status in ["RED", "AMBER", "OFFLINE_NETWORK_DROP"] else "Unassigned"
+    else:
+        assigned_tech = existing_tech
 
     FLEET_DB[hostname] = {
         "hostname": hostname,
@@ -85,6 +131,7 @@ async def receive_heartbeat(data: dict):
         "ip_address": data.get("ip_address", "127.0.0.1"),
         "status": status,
         "event_state": event_state,
+        "assigned_tech": assigned_tech,
         "last_seen": time.time(),
         "is_mock": False
     }
@@ -106,9 +153,20 @@ async def get_fleet_devices():
     return {"devices": list(FLEET_DB.values())}
 
 
+@app.post("/api/admin/reassign")
+async def reassign_machine(payload: dict):
+    """Manually reassigns a machine to a specific technician."""
+    hostname = payload.get("hostname")
+    tech_name = payload.get("tech_name")
+
+    if hostname in FLEET_DB:
+        FLEET_DB[hostname]["assigned_tech"] = tech_name
+        return {"status": "SUCCESS", "message": f"{hostname} reassigned to {tech_name}"}
+    return JSONResponse({"status": "ERROR", "message": "Host not found"}, status_code=404)
+
+
 @app.post("/api/admin/remediate/{hostname}")
 async def remediate_device(hostname: str):
-    """Temporary manual override. If real metrics still violate thresholds, next heartbeat reverts status."""
     if hostname in FLEET_DB:
         FLEET_DB[hostname]["status"] = "GREEN"
         FLEET_DB[hostname]["update_info"] = {"pending_updates_count": 0, "reboot_required": False}
@@ -153,6 +211,11 @@ async def get_agent_commands(hostname: str):
     COMMAND_QUEUE[hostname] = []
     return {"tasks": tasks}
 
+@app.get("/tech", response_class=HTMLResponse)
+async def render_tech_portal(request: Request):
+    """Renders the dedicated Technician Workload Portal."""
+    return templates.TemplateResponse(request=request, name="tech_portal.html")
+
 
 @app.post("/api/admin/launch-rdp")
 async def launch_rdp_session(payload: dict):
@@ -180,6 +243,7 @@ async def populate_mock_fleet():
             "ip_address": "10.14.20.105",
             "status": "RED",
             "event_state": "ACTIVE",
+            "assigned_tech": "Kevin Vance",
             "last_seen": time.time(),
             "is_mock": True
         },
@@ -193,6 +257,7 @@ async def populate_mock_fleet():
             "ip_address": "10.14.20.112",
             "status": "AMBER",
             "event_state": "ACTIVE",
+            "assigned_tech": "Sarah Connor",
             "last_seen": time.time(),
             "is_mock": True
         },
@@ -206,6 +271,7 @@ async def populate_mock_fleet():
             "ip_address": "10.14.20.130",
             "status": "OFFLINE_NETWORK_DROP",
             "event_state": "UNEXPECTED_DROP",
+            "assigned_tech": "Kevin Vance",
             "last_seen": time.time() - 300,
             "is_mock": True
         },
@@ -219,6 +285,7 @@ async def populate_mock_fleet():
             "ip_address": "10.14.20.145",
             "status": "OFFLINE_SHUTDOWN",
             "event_state": "GRACEFUL_SHUTDOWN",
+            "assigned_tech": "Unassigned",
             "last_seen": time.time() - 1200,
             "is_mock": True
         },
@@ -232,6 +299,7 @@ async def populate_mock_fleet():
             "ip_address": "10.14.20.118",
             "status": "GREEN",
             "event_state": "ACTIVE",
+            "assigned_tech": "Unassigned",
             "last_seen": time.time(),
             "is_mock": True
         }
