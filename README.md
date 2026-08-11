@@ -1,6 +1,6 @@
 # FleetPulse Control & Dispatch Plane 🖥️⚡
 
-An enterprise-grade **Remote Monitoring & Management (RMM)** and **IT Dispatch Engine** built natively for Windows environments using Python (FastAPI), Win32 APIs, and Tailwind CSS. **FleetPulse** provides exception-based fleet triage, real-time Windows update auditing, Active Directory user mapping, technician shift dispatching, and one-click Remote Desktop (RDP) remediation.
+An enterprise-grade **Remote Monitoring & Management (RMM)** and **IT Dispatch Engine** built natively for Windows environments using Python (FastAPI), SQLite, Win32 APIs, and Tailwind CSS. **FleetPulse** provides exception-based fleet triage, real-time Windows update auditing, Active Directory user mapping, technician shift dispatching, background service telemetry, and one-click Remote Desktop (RDP) remediation.
 
 ---
 
@@ -10,6 +10,7 @@ An enterprise-grade **Remote Monitoring & Management (RMM)** and **IT Dispatch E
 - **🚨 Priority-Based Exception Triage:** Compact, scannable lists segregating **Critical**, **Warning**, **Network Outages**, and **Compliant Fleet** rows.
 - **📡 Smart Connectivity Diagnostics:** Automatically distinguishes graceful off-shift user shutdowns from unexpected active network drops.
 - **🔄 Auto-Enforcement Guardrails:** Re-evaluates compliance thresholds on every heartbeat—automatically overriding manual remediation if underlying system issues persist.
+- **📊 SQLite Database Persistence:** All machine telemetry, technician shifts, and audit logs persist reliably across server restarts (leetpulse.db).
 
 ### 👥 2. Multi-Technician Workload Dispatch
 - **📊 Automated Load Balancing:** Automatically routes new critical issues to active, **ON_DUTY** technicians based on lowest current workload.
@@ -21,6 +22,11 @@ An enterprise-grade **Remote Monitoring & Management (RMM)** and **IT Dispatch E
 - **🖥️ One-Click Native RDP Launch:** Spawns native Windows Remote Desktop (mstsc.exe) directly targeting the endpoint IP.
 - **⚡ Background Shell Remediation:** Triggers remote shell actions (*Flush DNS*, *Restart Windows Update Service*, *Force USOClient Scan*).
 
+### 🔒 4. Enterprise Agent Security & Windows Service
+- **📦 Windows Background Service:** Automated PowerShell setup (install_service.ps1) using NSSM to run gent.py on system boot without user login.
+- **🛡️ Bearer Token Authentication:** All telemetry heartbeats and command polling endpoints are protected via shared bearer token verification (FleetPulse-Enterprise-Key-2026-Secure).
+- **📜 Comprehensive Audit Logging:** Tracks all technician actions, RDP launches, and command executions into a structured audit log table.
+
 ---
 
 ## 🏛️ System Architecture
@@ -28,14 +34,14 @@ An enterprise-grade **Remote Monitoring & Management (RMM)** and **IT Dispatch E
 `	ext
  ┌────────────────────────────────────────────────────────────────────────┐
  │                      FLEETPULSE CONTROL PLANE                          │
- │         (FastAPI Server • Active Directory Sync • Tailwind UI)         │
+ │      (FastAPI Server • SQLite Database • AD Sync • Bearer Auth)        │
  └───────────────────┬────────────────────────────────┬───────────────────┘
                      │                                │
- (1. Telemetry Heartbeats)             (2. Tech Portal Dispatch)
+ (1. Telemetry Heartbeats - Bearer Auth)      (2. Tech Portal Dispatch)
                      ▼                                ▼
 ┌──────────────────────────┐        ┌──────────────────────────┐
-│ Windows Telemetry Agent  │        │ Technician Desk (/tech)  │
-│ (Win32 Registry / WMI)   │        │ (Dedicated Task Queue)   │
+│ FleetPulseAgent Service  │        │ Technician Desk (/tech)  │
+│ (NSSM / Win32 Registry)  │        │ (Dedicated Task Queue)   │
 └────────────┬─────────────┘        └────────────┬─────────────┘
              │                                   │
              └───────────────┬───────────────────┘
@@ -60,7 +66,8 @@ Master Admin Dashboard: http://localhost:8080
 
 Technician Desk Portal: http://localhost:8080/tech
 
-3. Launch Endpoint Telemetry Agent
+3. Install & Start Background Agent Service (Admin Terminal)
 PowerShell
-.\venv\Scripts\activate
-python agent.py
+# Open PowerShell as Administrator
+cd C:\FleetPulse
+.\install_service.ps1
