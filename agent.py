@@ -2,7 +2,7 @@
 """
 =============================================================================
  FLEETPULSE ENDPOINT TELEMETRY & COMMAND AGENT
- Windows Native Telemetry Collector, Shutdown Handler & Remediation Engine
+ Windows Native Service Agent with Token Authentication
 =============================================================================
 """
 
@@ -20,9 +20,17 @@ try:
 except ImportError:
     winreg = None
 
+# Shared Secret Token for API Authentication
+AGENT_AUTH_TOKEN = "FleetPulse-Enterprise-Key-2026-Secure"
+
 SERVER_URL = "http://localhost:8080/api/telemetry/heartbeat"
 COMMAND_URL = "http://localhost:8080/api/agent/commands"
 FEEDBACK_URL = "http://localhost:8080/api/admin/command-result"
+
+HEADERS = {
+    "Authorization": f"Bearer {AGENT_AUTH_TOKEN}",
+    "Content-Type": "application/json"
+}
 
 
 def get_local_ip():
@@ -90,7 +98,6 @@ def get_hardware_info():
 
 
 def send_shutdown_signal():
-    """Sends a final heartbeat notifying the server that the PC is shutting down gracefully."""
     hostname = socket.gethostname()
     payload = {
         "hostname": hostname,
@@ -102,8 +109,7 @@ def send_shutdown_signal():
         "event_state": "GRACEFUL_SHUTDOWN"
     }
     try:
-        requests.post(SERVER_URL, json=payload, timeout=2)
-        print("[*] Graceful shutdown signal transmitted to FleetPulse Server.")
+        requests.post(SERVER_URL, json=payload, headers=HEADERS, timeout=2)
     except Exception:
         pass
 
@@ -113,19 +119,17 @@ def handle_exit_signals(sig, frame):
     sys.exit(0)
 
 
-# Register graceful shutdown hooks
 signal.signal(signal.SIGINT, handle_exit_signals)
 signal.signal(signal.SIGTERM, handle_exit_signals)
 
 
 def process_pending_commands(hostname: str):
     try:
-        res = requests.get(f"{COMMAND_URL}/{hostname}", timeout=3)
+        res = requests.get(f"{COMMAND_URL}/{hostname}", headers=HEADERS, timeout=3)
         if res.status_code == 200:
             tasks = res.json().get("tasks", [])
             for task in tasks:
                 cmd_type = task.get("command")
-                print(f"[!] Executing IT Admin Command: {cmd_type}")
 
                 output_text = ""
                 success = False
@@ -151,9 +155,9 @@ def process_pending_commands(hostname: str):
                     "success": success,
                     "output": output_text.strip()
                 }
-                requests.post(FEEDBACK_URL, json=feedback_payload, timeout=3)
-    except Exception as e:
-        print(f"[!] Command execution error: {e}")
+                requests.post(FEEDBACK_URL, json=feedback_payload, headers=HEADERS, timeout=3)
+    except Exception:
+        pass
 
 
 def send_telemetry():
@@ -172,15 +176,14 @@ def send_telemetry():
     }
 
     try:
-        res = requests.post(SERVER_URL, json=payload, timeout=5)
-        print(f"[+] Heartbeat Sent ({ip_addr})! Response: {res.json()}")
-        process_pending_commands(hostname)
-    except Exception as e:
-        print(f"[!] Server connection failed: {e}")
+        res = requests.post(SERVER_URL, json=payload, headers=HEADERS, timeout=5)
+        if res.status_code == 200:
+            process_pending_commands(hostname)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
-    print("[*] FleetPulse Agent Active. Sending heartbeats every 10 seconds...")
     while True:
         send_telemetry()
         time.sleep(10)

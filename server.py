@@ -2,7 +2,7 @@
 """
 =============================================================================
  FLEETPULSE CENTRAL IT COMMAND SERVER
- Multi-Technician Dispatch, Shift Tracking & Fleet Remediation Engine
+ Multi-Technician Dispatch, SQLite Storage & Token Authentication
 =============================================================================
 """
 
@@ -11,20 +11,25 @@ import json
 import time
 import subprocess
 from typing import Dict, List
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
+import database as db
+
 app = FastAPI(title="FleetPulse IT Management Console")
+
+db.init_db()
 
 os.makedirs("templates", exist_ok=True)
 templates = Jinja2Templates(directory="templates")
 
-FLEET_DB: Dict[str, dict] = {}
+# Expected Agent Bearer Token
+EXPECTED_AGENT_TOKEN = "Bearer FleetPulse-Enterprise-Key-2026-Secure"
+
 COMMAND_QUEUE: Dict[str, List[dict]] = {}
 COMMAND_RESULTS: Dict[str, List[dict]] = {}
 
-# Active Directory Mock Database
 MOCK_AD_DIRECTORY = {
     "admin": {"full_name": "System Administrator", "department": "IT Infrastructure", "email": "admin@company.com", "phone_ext": "4000"},
     "jdoe": {"full_name": "Jane Doe", "department": "Finance", "email": "jdoe@company.com", "phone_ext": "4401"},
@@ -35,12 +40,11 @@ MOCK_AD_DIRECTORY = {
     "dchen": {"full_name": "David Chen", "department": "Logistics", "email": "dchen@company.com", "phone_ext": "4406"},
 }
 
-# Technician Roster & Duty Tracking
-TECHNICIANS_DB = {
-    "tech1": {"id": "tech1", "name": "Kevin Vance", "status": "ON_DUTY", "role": "Desktop Support"},
-    "tech2": {"id": "tech2", "name": "Sarah Connor", "status": "ON_DUTY", "role": "Network Engineer"},
-    "tech3": {"id": "tech3", "name": "David Miller", "status": "ON_LEAVE", "role": "Systems Admin"},
-}
+
+def verify_agent_token(authorization: str = Header(None)):
+    """Verifies that incoming agent requests contain a valid Authorization token."""
+    if authorization != EXPECTED_AGENT_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized Agent Access")
 
 
 def calculate_health_status(os_info: dict, update_info: dict, hw_info: dict, event_state: str) -> str:
@@ -59,19 +63,18 @@ def calculate_health_status(os_info: dict, update_info: dict, hw_info: dict, eve
 
 
 def auto_assign_technician() -> str:
-    """Finds an ON_DUTY technician with the lightest workload."""
-    on_duty_techs = [t["name"] for t in TECHNICIANS_DB.values() if t["status"] == "ON_DUTY"]
+    techs = db.get_all_techs()
+    on_duty_techs = [t["name"] for t in techs if t["status"] == "ON_DUTY"]
     if not on_duty_techs:
-        return "Unassigned (No Techs On Duty)"
+        return "Unassigned"
 
-    # Count current active assignments per tech
+    devices = db.get_all_devices()
     counts = {tech: 0 for tech in on_duty_techs}
-    for dev in FLEET_DB.values():
+    for dev in devices:
         assigned = dev.get("assigned_tech")
         if assigned in counts and dev.get("status") in ["RED", "AMBER", "OFFLINE_NETWORK_DROP"]:
             counts[assigned] += 1
 
-    # Return technician with minimum current workload
     return min(counts, key=counts.get)
 
 
@@ -80,24 +83,28 @@ async def render_dashboard(request: Request):
     return templates.TemplateResponse(request=request, name="dashboard.html")
 
 
+@app.get("/tech", response_class=HTMLResponse)
+async def render_tech_portal(request: Request):
+    return templates.TemplateResponse(request=request, name="tech_portal.html")
+
+
 @app.get("/api/techs")
 async def get_technicians():
-    """Returns technician roster and duty states."""
-    return {"techs": list(TECHNICIANS_DB.values())}
+    return {"techs": db.get_all_techs()}
 
 
 @app.post("/api/techs/duty/{tech_id}")
 async def toggle_tech_duty(tech_id: str, payload: dict):
-    """Toggles technician between ON_DUTY, OFF_DUTY, or ON_LEAVE."""
-    if tech_id in TECHNICIANS_DB:
-        new_status = payload.get("status", "ON_DUTY")
-        TECHNICIANS_DB[tech_id]["status"] = new_status
-        return {"status": "SUCCESS", "tech": TECHNICIANS_DB[tech_id]}
-    return JSONResponse({"status": "ERROR", "message": "Technician not found"}, status_code=404)
+    new_status = payload.get("status", "ON_DUTY")
+    db.update_tech_status(tech_id, new_status)
+    db.log_audit_event("SYSTEM", tech_id, "DUTY_CHANGE", f"Status changed to {new_status}")
+    return {"status": "SUCCESS"}
 
 
 @app.post("/api/telemetry/heartbeat")
-async def receive_heartbeat(data: dict):
+async def receive_heartbeat(data: dict, authorization: str = Header(None)):
+    verify_agent_token(authorization)
+    
     hostname = data.get("hostname", "UNKNOWN-PC")
     username = data.get("logged_user", "").lower()
     event_state = data.get("event_state", "ACTIVE")
@@ -114,14 +121,15 @@ async def receive_heartbeat(data: dict):
         event_state
     )
 
-    # Preserve existing assigned tech or auto-assign if new/needing attention
-    existing_tech = FLEET_DB.get(hostname, {}).get("assigned_tech")
-    if not existing_tech or existing_tech.startswith("Unassigned"):
+    existing_devices = {d["hostname"]: d for d in db.get_all_devices()}
+    existing_tech = existing_devices.get(hostname, {}).get("assigned_tech")
+    
+    if not existing_tech or existing_tech == "Unassigned":
         assigned_tech = auto_assign_technician() if status in ["RED", "AMBER", "OFFLINE_NETWORK_DROP"] else "Unassigned"
     else:
         assigned_tech = existing_tech
 
-    FLEET_DB[hostname] = {
+    device_payload = {
         "hostname": hostname,
         "logged_user": username,
         "user_details": ad_profile,
@@ -136,42 +144,50 @@ async def receive_heartbeat(data: dict):
         "is_mock": False
     }
 
+    db.save_device(device_payload)
     return {"status": "SUCCESS", "assigned_health": status}
 
 
 @app.get("/api/fleet/devices")
 async def get_fleet_devices():
     now = time.time()
-    for hostname, device in FLEET_DB.items():
+    devices = db.get_all_devices()
+    for device in devices:
         if device.get("is_mock"):
             if device["status"] not in ["OFFLINE_NETWORK_DROP", "OFFLINE_SHUTDOWN"]:
                 device["last_seen"] = now
+                db.save_device(device)
         else:
             if device["status"] != "OFFLINE_SHUTDOWN" and (now - device["last_seen"]) > 25:
                 device["status"] = "OFFLINE_NETWORK_DROP"
+                db.save_device(device)
 
-    return {"devices": list(FLEET_DB.values())}
+    return {"devices": devices}
 
 
 @app.post("/api/admin/reassign")
 async def reassign_machine(payload: dict):
-    """Manually reassigns a machine to a specific technician."""
     hostname = payload.get("hostname")
     tech_name = payload.get("tech_name")
 
-    if hostname in FLEET_DB:
-        FLEET_DB[hostname]["assigned_tech"] = tech_name
-        return {"status": "SUCCESS", "message": f"{hostname} reassigned to {tech_name}"}
-    return JSONResponse({"status": "ERROR", "message": "Host not found"}, status_code=404)
+    if hostname and tech_name:
+        db.update_device_tech(hostname, tech_name)
+        db.log_audit_event(hostname, "ADMIN", "REASSIGN", f"Assigned to {tech_name}")
+        return {"status": "SUCCESS"}
+    return JSONResponse({"status": "ERROR", "message": "Missing parameters"}, status_code=400)
 
 
 @app.post("/api/admin/remediate/{hostname}")
 async def remediate_device(hostname: str):
-    if hostname in FLEET_DB:
-        FLEET_DB[hostname]["status"] = "GREEN"
-        FLEET_DB[hostname]["update_info"] = {"pending_updates_count": 0, "reboot_required": False}
-        FLEET_DB[hostname]["hardware_info"]["free_disk_gb"] = max(FLEET_DB[hostname]["hardware_info"].get("free_disk_gb", 50), 50.0)
-        return {"status": "SUCCESS", "message": f"{hostname} marked as Healthy"}
+    devices = {d["hostname"]: d for d in db.get_all_devices()}
+    if hostname in devices:
+        dev = devices[hostname]
+        dev["status"] = "GREEN"
+        dev["update_info"] = {"pending_updates_count": 0, "reboot_required": False}
+        dev["hardware_info"]["free_disk_gb"] = max(dev["hardware_info"].get("free_disk_gb", 50), 50.0)
+        db.save_device(dev)
+        db.log_audit_event(hostname, "TECH", "REMEDIATED", "Marked issue as resolved")
+        return {"status": "SUCCESS"}
     return JSONResponse({"status": "ERROR", "message": "Host not found"}, status_code=404)
 
 
@@ -187,16 +203,19 @@ async def queue_admin_command(payload: dict):
         COMMAND_QUEUE[hostname] = []
 
     COMMAND_QUEUE[hostname].append({"command": command, "timestamp": time.time()})
+    db.log_audit_event(hostname, "ADMIN", "COMMAND_QUEUED", command)
     return {"status": "QUEUED", "hostname": hostname, "command": command}
 
 
 @app.post("/api/admin/command-result")
-async def store_command_result(payload: dict):
+async def store_command_result(payload: dict, authorization: str = Header(None)):
+    verify_agent_token(authorization)
     hostname = payload.get("hostname")
     if hostname:
         if hostname not in COMMAND_RESULTS:
             COMMAND_RESULTS[hostname] = []
         COMMAND_RESULTS[hostname].insert(0, payload)
+        db.log_audit_event(hostname, "AGENT", "COMMAND_EXECUTED", f"{payload.get('command')}: {payload.get('output')}")
     return {"status": "RECORDED"}
 
 
@@ -206,15 +225,11 @@ async def get_command_results(hostname: str):
 
 
 @app.get("/api/agent/commands/{hostname}")
-async def get_agent_commands(hostname: str):
+async def get_agent_commands(hostname: str, authorization: str = Header(None)):
+    verify_agent_token(authorization)
     tasks = COMMAND_QUEUE.get(hostname, [])
     COMMAND_QUEUE[hostname] = []
     return {"tasks": tasks}
-
-@app.get("/tech", response_class=HTMLResponse)
-async def render_tech_portal(request: Request):
-    """Renders the dedicated Technician Workload Portal."""
-    return templates.TemplateResponse(request=request, name="tech_portal.html")
 
 
 @app.post("/api/admin/launch-rdp")
@@ -225,6 +240,7 @@ async def launch_rdp_session(payload: dict):
 
     try:
         subprocess.Popen(f"mstsc.exe /v:{target_ip}", shell=True)
+        db.log_audit_event(target_ip, "ADMIN", "RDP_LAUNCH", f"RDP session opened to {target_ip}")
         return {"status": "SUCCESS", "message": f"RDP session initiated to {target_ip}"}
     except Exception as e:
         return JSONResponse({"status": "ERROR", "message": str(e)}, status_code=500)
@@ -306,7 +322,7 @@ async def populate_mock_fleet():
     ]
 
     for pc in mock_pcs:
-        FLEET_DB[pc["hostname"]] = pc
+        db.save_device(pc)
 
     return {"status": "SUCCESS", "added": len(mock_pcs)}
 
