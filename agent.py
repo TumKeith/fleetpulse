@@ -2,7 +2,7 @@
 """
 =============================================================================
  FLEETPULSE ENTERPRISE BACKGROUND AGENT
- Win32 NT Kernel Collector, Dynamic OS Query & True Windows User Profile Tracking
+ Win32 NT Kernel Collector, Dynamic OS Query & Pure Win32 Registry Email Extractor
 =============================================================================
 """
 
@@ -26,13 +26,14 @@ POLL_INTERVAL_SECONDS = 10
 
 def get_logged_in_user_details() -> dict:
     """
-    Dynamically queries WMI and CIM for the active interactive desktop user 
-    and resolves their true Windows Full Name / Display Name.
+    Dynamically inspects HKEY_USERS via native winreg to extract 
+    active session username, Full Name, and registered Microsoft/School email.
     """
     username = getpass.getuser().lower()
     full_name = ""
+    email = ""
 
-    # 1. Fetch active interactive user logged into the session
+    # 1. Fetch active interactive user logged into the desktop session
     try:
         cmd_user = "powershell -Command \"(Get-CimInstance Win32_ComputerSystem).UserName\""
         res_user = subprocess.run(cmd_user, shell=True, capture_output=True, text=True, timeout=5)
@@ -42,7 +43,7 @@ def get_logged_in_user_details() -> dict:
     except Exception:
         pass
 
-    # 2. Fetch the true Full Name / Display Name from Windows User Account database
+    # 2. Fetch true Full Name from Windows User Account DB
     try:
         cmd_fullname = f"powershell -Command \"(Get-CimInstance Win32_UserAccount -Filter \\\"Name='{username}'\\\").FullName\""
         res_fullname = subprocess.run(cmd_fullname, shell=True, capture_output=True, text=True, timeout=5)
@@ -51,23 +52,52 @@ def get_logged_in_user_details() -> dict:
     except Exception:
         pass
 
-    # Fallback to capitalized username if Full Name isn't configured in Windows
+    # 3. 🎯 NATIVE WINREG EMAIL EXTRACTOR (Scans HKEY_USERS directly for IdentityCRL keys)
+    try:
+        hk_users = winreg.ConnectRegistry(None, winreg.HKEY_USERS)
+        index = 0
+        while True:
+            try:
+                sid_name = winreg.EnumKey(hk_users, index)
+                index += 1
+                if "S-1-5-21" in sid_name and not sid_name.endswith("_Classes"):
+                    key_path = f"{sid_name}\\Software\\Microsoft\\IdentityCRL\\UserExtendedProperties"
+                    try:
+                        identity_key = winreg.OpenKey(hk_users, key_path)
+                        sub_index = 0
+                        while True:
+                            try:
+                                account_email = winreg.EnumKey(identity_key, sub_index)
+                                if "@" in account_email:
+                                    email = account_email.strip().lower()
+                                    break
+                                sub_index += 1
+                            except OSError:
+                                break
+                        winreg.CloseKey(identity_key)
+                    except OSError:
+                        pass
+                if email:
+                    break
+            except OSError:
+                break
+        winreg.CloseKey(hk_users)
+    except Exception:
+        pass
+
     if not full_name:
         full_name = username.title()
 
     return {
         "username": username,
-        "full_name": full_name
+        "full_name": full_name,
+        "email": email
     }
 
 
 def get_accurate_os_info() -> dict:
-    """
-    Dynamically queries native Win32 NT Kernel APIs and WMI CIM instances 
-    to extract true OS product name, display version, and build number.
-    """
+    """Dynamically queries native Win32 NT Kernel APIs and WMI CIM instances."""
     try:
-        # 1. Read OS Details from Registry as initial baseline
         key = winreg.OpenKey(
             winreg.HKEY_LOCAL_MACHINE,
             r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
@@ -78,7 +108,6 @@ def get_accurate_os_info() -> dict:
         display_version, _ = winreg.QueryValueEx(key, "DisplayVersion")
         winreg.CloseKey(key)
 
-        # 2. Query true NT Kernel version via ntdll.dll (Bypasses compatibility layer)
         class OSVERSIONINFOEXW(ctypes.Structure):
             _fields_ = [
                 ('dwOSVersionInfoSize', ctypes.c_ulong),
@@ -99,7 +128,6 @@ def get_accurate_os_info() -> dict:
         ctypes.windll.ntdll.RtlGetVersion(ctypes.byref(os_info))
         true_build = os_info.dwBuildNumber
 
-        # 3. If running Windows 11 (Build 22000+) but registry returns legacy string, query CIM directly
         if true_build >= 22000 and "10" in product_name:
             cmd = "powershell -Command \"(Get-CimInstance Win32_OperatingSystem).Caption\""
             res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
@@ -120,11 +148,10 @@ def get_accurate_os_info() -> dict:
 
 
 def get_system_telemetry() -> dict:
-    """Collects dynamic endpoint hardware, OS, true user profile, and update state metrics."""
+    """Collects dynamic endpoint hardware, OS, true user profile, email, and update state metrics."""
     hostname = socket.gethostname()
     user_info = get_logged_in_user_details()
     
-    # Query true local network interface IP address
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
@@ -135,7 +162,6 @@ def get_system_telemetry() -> dict:
 
     os_info = get_accurate_os_info()
 
-    # Query dynamic free disk space on C: drive
     try:
         import shutil
         total, used, free = shutil.disk_usage("C:\\")
@@ -147,6 +173,7 @@ def get_system_telemetry() -> dict:
         "hostname": hostname,
         "logged_user": user_info["username"],
         "user_full_name": user_info["full_name"],
+        "user_email": user_info["email"],
         "ip_address": ip_address,
         "os_info": os_info,
         "update_info": {
@@ -180,7 +207,7 @@ def execute_queued_command(command: str) -> str:
 
 
 def run_agent_loop():
-    """Main background telemetry transmission and command execution loop."""
+    """Main background telemetry transmission loop."""
     print(f"[FleetPulse Agent] Initialized. Target Control Plane: {SERVER_URL}")
     while True:
         try:
@@ -197,7 +224,7 @@ def run_agent_loop():
             
             with urllib.request.urlopen(req) as response:
                 res_data = json.loads(response.read().decode("utf-8"))
-                print(f"[{time.strftime('%H:%M:%S')}] Heartbeat Delivered for '{telemetry['user_full_name']}' ({telemetry['logged_user']}). Health: {res_data.get('assigned_health')}")
+                print(f"[{time.strftime('%H:%M:%S')}] Heartbeat Delivered for '{telemetry['user_full_name']}' ({telemetry['user_email'] or telemetry['logged_user']}). Health: {res_data.get('assigned_health')}")
 
             # Poll for pending administrative remediation commands
             cmd_req = urllib.request.Request(
@@ -213,7 +240,6 @@ def run_agent_loop():
                     print(f"[Agent Action] Executing queued command: {cmd_str}")
                     output = execute_queued_command(cmd_str)
                     
-                    # Post result back to server
                     result_payload = {
                         "hostname": telemetry["hostname"],
                         "command": cmd_str,

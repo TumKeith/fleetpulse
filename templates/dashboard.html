@@ -3,393 +3,363 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FleetPulse - Enterprise IT Dispatch & Control Plane</title>
+    <title>FleetPulse IT Management Console</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        body { background-color: #0b1329; color: #f8fafc; font-family: 'Segoe UI', sans-serif; }
-        .glass-card { background: rgba(23, 32, 54, 0.85); backdrop-filter: blur(10px); border: 1px solid rgba(51, 65, 85, 0.6); }
-        .pulse-red { box-shadow: 0 0 8px #ef4444; }
-        .pulse-amber { box-shadow: 0 0 8px #f59e0b; }
-        .pulse-green { box-shadow: 0 0 8px #10b981; }
-        .pulse-purple { box-shadow: 0 0 8px #a855f7; }
+        body { background-color: #0b0f19; color: #f3f4f6; }
+        .card-bg { background-color: #111827; border: 1px solid #1f2937; }
+        .modal-bg { background-color: rgba(11, 15, 25, 0.85); backdrop-filter: blur(8px); }
     </style>
 </head>
-<body class="p-6">
-    <!-- Header -->
-    <header class="flex justify-between items-center pb-6 mb-6 border-b border-slate-800">
-        <div>
-            <h1 class="text-2xl font-bold text-sky-400">FLEET<span class="text-slate-100">PULSE</span> IT DISPATCH PLANE</h1>
-            <p class="text-xs text-slate-400">Workload Distribution • Technician Shift Management • Remote Remediation</p>
-        </div>
-        <div class="flex space-x-3">
-            <button onclick="populateMockFleet()" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded border border-slate-700 transition">⚡ Reset / Load Mock Fleet</button>
-            <button onclick="fetchFleetData(true)" class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-xs font-semibold rounded text-white transition flex items-center space-x-1">
-                <span id="refresh-icon">↻</span> <span>Refresh Status</span>
-            </button>
-        </div>
-    </header>
-
-    <!-- TECHNICIAN SHIFT & ROSTER BAR -->
-    <section class="mb-6 glass-card p-4 rounded-xl border border-slate-800">
-        <div class="flex justify-between items-center mb-3">
-            <h2 class="text-xs font-bold text-sky-400 uppercase tracking-wider flex items-center space-x-2">
-                <span>👥 Technician Roster & Shift Status</span>
-            </h2>
-            <div class="flex items-center space-x-2 text-xs">
-                <span class="text-slate-400">Filter View by Tech:</span>
-                <select id="tech-filter" onchange="fetchFleetData()" class="bg-slate-900 text-sky-300 border border-slate-700 rounded px-2 py-1 font-bold">
-                    <option value="ALL">🌐 All Technicians (Global View)</option>
-                    <!-- Populated via JS -->
-                </select>
+<body class="font-sans antialiased">
+    <div class="min-h-screen p-6 max-w-7xl mx-auto">
+        
+        <!-- Header Controls -->
+        <div class="flex justify-between items-center mb-8 border-b border-gray-800 pb-6">
+            <div>
+                <h1 class="text-3xl font-extrabold tracking-tight text-white flex items-center gap-3">
+                    <i class="fa-solid fa-server text-indigo-500"></i> FLEETPULSE IT DISPATCH PLANE
+                </h1>
+                <p class="text-gray-400 text-sm mt-1">Workload Distribution • Technician Shift Management • Remote Remediation</p>
+            </div>
+            <div class="flex gap-3">
+                <button onclick="fetch('/api/demo/populate-mock', {method:'POST'}).then(() => location.reload())" 
+                        class="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-amber-400 text-sm font-semibold rounded-lg border border-amber-500/20 transition flex items-center gap-2">
+                    <i class="fa-solid fa-bolt"></i> Reset / Load Mock Fleet
+                </button>
+                <button onclick="location.reload()" 
+                        class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold rounded-lg shadow-lg transition flex items-center gap-2">
+                    <i class="fa-solid fa-rotate"></i> Refresh Status
+                </button>
             </div>
         </div>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4" id="tech-roster-grid">
-            <div class="text-slate-500 text-xs italic">Loading technician shift roster...</div>
-        </div>
-    </section>
 
-    <!-- 1. CRITICAL ZONE -->
-    <section class="mb-6">
-        <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-bold text-rose-400 flex items-center space-x-2">
-                <span>🚨 Priority 1: Critical Issues (Immediate Action Required)</span>
-            </h2>
-            <span id="critical-count" class="text-xs bg-rose-950 text-rose-300 px-2.5 py-0.5 rounded-full border border-rose-800 font-bold">0 Machines</span>
-        </div>
-        <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3 divide-y divide-slate-800/80" id="critical-list">
-            <div class="text-slate-500 text-xs italic p-2">Loading critical items...</div>
-        </div>
-    </section>
+        <!-- TECHNICIAN ROSTER HEADER WITH ADD BUTTON -->
+        <div class="card-bg rounded-xl p-5 mb-8 shadow-xl">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-bold text-gray-200 flex items-center gap-2">
+                    <i class="fa-solid fa-users text-indigo-400"></i> TECHNICIAN ROSTER & SHIFT STATUS
+                </h2>
+                <button onclick="openAddTechModal()" 
+                        class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg shadow transition flex items-center gap-2">
+                    <i class="fa-solid fa-user-plus"></i> + Onboard Tech
+                </button>
+            </div>
 
-    <!-- 2. WARNING ZONE -->
-    <section class="mb-6">
-        <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-bold text-amber-400 flex items-center space-x-2">
-                <span>⚠️ Priority 2: Warnings & Pending Updates</span>
-            </h2>
-            <span id="warning-count" class="text-xs bg-amber-950 text-amber-300 px-2.5 py-0.5 rounded-full border border-amber-800 font-bold">0 Machines</span>
+            <!-- Technician List Container -->
+            <div id="techs-container" class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4"></div>
         </div>
-        <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3 divide-y divide-slate-800/80" id="warning-list">
-            <div class="text-slate-500 text-xs italic p-2">Loading warning items...</div>
-        </div>
-    </section>
 
-    <!-- 3. OFFLINE NETWORK DROPS -->
-    <section class="mb-6">
-        <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-bold text-purple-400 flex items-center space-x-2">
-                <span>📡 Network Outages & Active Connection Drops</span>
-            </h2>
-            <span id="offline-count" class="text-xs bg-purple-950 text-purple-300 px-2.5 py-0.5 rounded-full border border-purple-800 font-bold">0 Machines</span>
-        </div>
-        <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3 divide-y divide-slate-800/80" id="offline-list">
-            <div class="text-slate-500 text-xs italic p-2">Loading network outages...</div>
-        </div>
-    </section>
-
-    <!-- 4. HEALTHY FLEET ZONE -->
-    <section>
-        <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-bold text-emerald-400 flex items-center space-x-2">
-                <span>🟢 Healthy Fleet (Compliant & Operating Normally)</span>
-            </h2>
-            <span id="healthy-count" class="text-xs bg-emerald-950 text-emerald-300 px-2.5 py-0.5 rounded-full border border-emerald-800 font-bold">0 Machines</span>
-        </div>
-        <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-3 divide-y divide-slate-800/60" id="healthy-list">
-            <div class="text-slate-500 text-xs italic p-2">Loading compliant hosts...</div>
-        </div>
-    </section>
-
-    <!-- ACTION & REMEDIATION MODAL -->
-    <div id="action-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center hidden z-50 p-4">
-        <div class="glass-card rounded-xl max-w-lg w-full p-6 border border-slate-700 shadow-2xl">
-            <div class="flex justify-between items-center border-b border-slate-800 pb-3 mb-4">
+        <!-- SLA Performance Banner -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            <div class="card-bg p-4 rounded-xl flex items-center justify-between border-l-4 border-indigo-500">
                 <div>
-                    <h3 id="modal-hostname" class="text-lg font-bold text-sky-400">PC Remediate</h3>
-                    <p id="modal-ip" class="text-xs text-slate-400 font-mono"></p>
+                    <p class="text-xs text-gray-400 uppercase font-semibold">Mean Time to Remediate (MTTR)</p>
+                    <p id="sla-mttr" class="text-2xl font-black text-white mt-1">0.0s</p>
                 </div>
-                <button onclick="closeModal()" class="text-slate-400 hover:text-white font-bold">&times;</button>
+                <i class="fa-solid fa-stopwatch text-3xl text-indigo-500/40"></i>
             </div>
-            
-            <div id="modal-alert" class="hidden mb-3 p-2 bg-emerald-950 border border-emerald-700 text-emerald-300 text-xs rounded text-center font-bold"></div>
-            <div id="modal-body" class="space-y-4 text-sm text-slate-300"></div>
+            <div class="card-bg p-4 rounded-xl flex items-center justify-between border-l-4 border-emerald-500">
+                <div>
+                    <p class="text-xs text-gray-400 uppercase font-semibold">Total Remediated Incidents</p>
+                    <p id="sla-resolved" class="text-2xl font-black text-white mt-1">0</p>
+                </div>
+                <i class="fa-solid fa-circle-check text-3xl text-emerald-500/40"></i>
+            </div>
+        </div>
 
-            <div class="mt-6 flex justify-end space-x-3">
-                <button onclick="closeModal()" class="px-4 py-2 bg-slate-800 text-slate-300 text-xs rounded">Close</button>
+        <!-- Priority Devices Grid -->
+        <div class="space-y-6">
+            <!-- Critical Section -->
+            <div class="card-bg rounded-xl p-5 border-l-4 border-red-500">
+                <h3 class="text-md font-bold text-red-400 mb-4 flex items-center gap-2">
+                    <i class="fa-solid fa-triangle-exclamation"></i> Priority 1: Critical Issues (Immediate Action Required)
+                </h3>
+                <div id="critical-devices" class="space-y-3"></div>
+            </div>
+
+            <!-- Warnings Section -->
+            <div class="card-bg rounded-xl p-5 border-l-4 border-amber-500">
+                <h3 class="text-md font-bold text-amber-400 mb-4 flex items-center gap-2">
+                    <i class="fa-solid fa-circle-exclamation"></i> Priority 2: Warnings & Pending Updates
+                </h3>
+                <div id="amber-devices" class="space-y-3"></div>
+            </div>
+
+            <!-- Compliant Section -->
+            <div class="card-bg rounded-xl p-5 border-l-4 border-emerald-500">
+                <h3 class="text-md font-bold text-emerald-400 mb-4 flex items-center gap-2">
+                    <i class="fa-solid fa-shield-halved"></i> Priority 3: Healthy Devices & Normal Operations
+                </h3>
+                <div id="green-devices" class="space-y-3"></div>
             </div>
         </div>
     </div>
 
-    <script>
-        let GLOBAL_TECHS = [];
-
-        async function fetchTechRoster() {
-            const res = await fetch('/api/techs');
-            const data = await res.json();
-            GLOBAL_TECHS = data.techs;
-
-            const grid = document.getElementById('tech-roster-grid');
-            const filterSelect = document.getElementById('tech-filter');
+    <!-- SUPER ADMIN DEVICE INSPECT & REMEDIATE MODAL -->
+    <div id="deviceModal" class="fixed inset-0 modal-bg hidden flex items-center justify-center p-4 z-50">
+        <div class="card-bg rounded-xl max-w-2xl w-full p-6 shadow-2xl border border-gray-700">
+            <div class="flex justify-between items-center mb-4 border-b border-gray-800 pb-3">
+                <div>
+                    <h3 id="modalHostname" class="text-xl font-bold text-white flex items-center gap-2"></h3>
+                    <p id="modalIp" class="text-xs text-gray-400"></p>
+                </div>
+                <button onclick="closeDeviceModal()" class="text-gray-400 hover:text-white text-2xl">&times;</button>
+            </div>
             
-            // Retain selected filter
-            const currentSelected = filterSelect.value;
-            filterSelect.innerHTML = '<option value="ALL">🌐 All Technicians (Global View)</option>';
+            <div class="space-y-4">
+                <!-- Reassignment Row -->
+                <div class="bg-gray-900 p-3 rounded-lg flex justify-between items-center border border-gray-800">
+                    <span class="text-xs font-semibold uppercase text-gray-400">Assigned Technician:</span>
+                    <select id="modalTechSelect" onchange="reassignDevice(this.value)" class="bg-gray-800 border border-gray-700 text-xs text-white rounded p-1.5 focus:outline-none"></select>
+                </div>
 
-            grid.innerHTML = '';
-            GLOBAL_TECHS.forEach(tech => {
-                filterSelect.innerHTML += `<option value="${tech.name}" ${currentSelected === tech.name ? 'selected' : ''}>🛠️ ${tech.name} (${tech.status.replace('_', ' ')})</option>`;
-
-                let statusBadge = '';
-                if (tech.status === 'ON_DUTY') statusBadge = '<span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 font-bold">ON DUTY</span>';
-                else if (tech.status === 'OFF_DUTY') statusBadge = '<span class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 font-bold">OFF DUTY</span>';
-                else statusBadge = '<span class="px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800 font-bold">ON LEAVE</span>';
-
-                grid.innerHTML += `
-                    <div class="bg-slate-900/80 p-3 rounded-lg border border-slate-800 flex justify-between items-center text-xs">
+                <!-- Hardware & User Specs -->
+                <div class="grid grid-cols-2 gap-4 text-xs">
+                    <div class="bg-gray-900 p-3 rounded-lg border border-gray-800 flex flex-col justify-between">
                         <div>
-                            <div class="font-bold text-slate-200">${tech.name}</div>
-                            <div class="text-[11px] text-slate-400">${tech.role}</div>
+                            <p class="font-bold text-indigo-400 mb-1">User & Email Profile</p>
+                            <p id="modalUser" class="text-white font-semibold"></p>
+                            <p id="modalEmail" class="text-gray-300 mt-1 font-mono text-[11px]"></p>
                         </div>
-                        <div class="flex items-center space-x-2">
-                            ${statusBadge}
-                            <select onchange="updateTechDuty('${tech.id}', this.value)" class="bg-slate-800 text-slate-300 border border-slate-700 rounded text-[11px] px-1 py-0.5">
-                                <option value="ON_DUTY" ${tech.status === 'ON_DUTY' ? 'selected' : ''}>On Duty</option>
-                                <option value="OFF_DUTY" ${tech.status === 'OFF_DUTY' ? 'selected' : ''}>Off Duty</option>
-                                <option value="ON_LEAVE" ${tech.status === 'ON_LEAVE' ? 'selected' : ''}>On Leave</option>
-                            </select>
+                        <!-- Direct Comms Buttons -->
+                        <div class="flex gap-2 mt-3 pt-2 border-t border-gray-800">
+                            <a id="btnEmailUser" href="#" target="_blank" class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-indigo-300 text-xs rounded border border-gray-700 flex items-center gap-1">
+                                <i class="fa-solid fa-envelope"></i> Email User
+                            </a>
+                            <a id="btnTeamsUser" href="#" target="_blank" class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-indigo-300 text-xs rounded border border-gray-700 flex items-center gap-1">
+                                <i class="fa-solid fa-comments"></i> Teams Chat
+                            </a>
                         </div>
                     </div>
-                `;
+                    <div class="bg-gray-900 p-3 rounded-lg border border-gray-800">
+                        <p class="font-bold text-indigo-400 mb-1">System Specs</p>
+                        <p id="modalOs" class="text-white"></p>
+                        <p id="modalDisk" class="text-gray-400 mt-1"></p>
+                    </div>
+                </div>
+
+                <!-- Immediate Admin Override Buttons -->
+                <div class="space-y-2 pt-2">
+                    <p class="text-xs font-bold text-gray-400 uppercase">⚡ Super Admin Remediation Commands</p>
+                    <div class="grid grid-cols-3 gap-2">
+                        <button onclick="sendRemoteCommand('flushdns')" class="p-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-semibold rounded border border-gray-700">🧹 Flush DNS</button>
+                        <button onclick="sendRemoteCommand('restart_wuauserv')" class="p-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-semibold rounded border border-gray-700">🔄 Restart WU</button>
+                        <button onclick="sendRemoteCommand('usoclient_scan')" class="p-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-semibold rounded border border-gray-700">🚀 Force Scan</button>
+                    </div>
+                </div>
+
+                <div class="flex justify-between items-center pt-4 border-t border-gray-800">
+                    <button onclick="launchRDP()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded shadow flex items-center gap-2">
+                        <i class="fa-solid fa-desktop"></i> Launch RDP Session
+                    </button>
+                    <button onclick="overrideRemediate()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded shadow flex items-center gap-2">
+                        <i class="fa-solid fa-check"></i> Mark Remediated
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ADD TECHNICIAN MODAL -->
+    <div id="addTechModal" class="fixed inset-0 modal-bg hidden flex items-center justify-center p-4 z-50">
+        <div class="card-bg rounded-xl max-w-md w-full p-6 shadow-2xl border border-gray-700">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-user-plus text-emerald-400"></i> Onboard New Technician
+                </h3>
+                <button onclick="closeAddTechModal()" class="text-gray-400 hover:text-white text-lg">&times;</button>
+            </div>
+            
+            <form id="addTechForm" onsubmit="submitNewTech(event)" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Full Name</label>
+                    <input type="text" id="techName" required placeholder="e.g., Alex Mercer" 
+                           class="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Company Email</label>
+                    <input type="email" id="techEmail" required placeholder="e.g., amercer@company.com" 
+                           class="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+                </div>
+                <div class="flex justify-end gap-3 pt-3">
+                    <button type="button" onclick="closeAddTechModal()" class="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-semibold rounded-lg">Cancel</button>
+                    <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-lg shadow">Save Technician</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- SCRIPT SECTION -->
+    <script>
+        let currentDevice = null;
+        let allTechs = [];
+
+        function openAddTechModal() { document.getElementById('addTechModal').classList.remove('hidden'); }
+        function closeAddTechModal() { document.getElementById('addTechModal').classList.add('hidden'); }
+        function closeDeviceModal() { document.getElementById('deviceModal').classList.add('hidden'); }
+
+        async function submitNewTech(e) {
+            e.preventDefault();
+            const name = document.getElementById('techName').value;
+            const email = document.getElementById('techEmail').value;
+
+            const res = await fetch('/api/techs/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, email })
             });
+
+            const data = await res.json();
+            if (data.status === 'SUCCESS') {
+                closeAddTechModal();
+                loadFleetData();
+            } else {
+                alert("Error onboarding technician: " + data.message);
+            }
         }
 
-        async function updateTechDuty(techId, newStatus) {
+        async function updateDutyStatus(techId, newStatus) {
             await fetch(`/api/techs/duty/${techId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ status: newStatus })
             });
-            await fetchTechRoster();
-            fetchFleetData();
+            loadFleetData();
         }
 
-        async function fetchFleetData(showFeedback = false) {
-            if (showFeedback) {
-                document.getElementById('refresh-icon').classList.add('animate-spin');
-            }
+        function inspectDevice(device) {
+            currentDevice = device;
+            const userFull = device.user_details.full_name || device.logged_user || 'Unassigned';
+            const userEmail = device.user_details.email || `${device.logged_user || 'user'}@company.com`;
 
-            await fetchTechRoster();
+            document.getElementById('modalHostname').innerHTML = `<i class="fa-solid fa-desktop text-indigo-400"></i> ${device.hostname}`;
+            document.getElementById('modalIp').innerText = `IP Address: ${device.ip_address}`;
+            document.getElementById('modalUser').innerText = `Owner: ${userFull}`;
+            document.getElementById('modalEmail').innerText = `Email: ${userEmail}`;
+            document.getElementById('modalOs').innerText = `OS: ${device.os_info.product_name || 'Windows'}`;
+            document.getElementById('modalDisk').innerText = `Free Disk: ${device.hardware_info.free_disk_gb || 'N/A'} GB`;
 
-            const res = await fetch('/api/fleet/devices');
-            const data = await res.json();
+            document.getElementById('btnEmailUser').href = `mailto:${userEmail}?subject=FleetPulse%20IT%20Support%20-%20${device.hostname}`;
+            document.getElementById('btnTeamsUser').href = `https://teams.microsoft.com/l/chat/0/0?users=${userEmail}`;
 
-            if (showFeedback) {
-                setTimeout(() => document.getElementById('refresh-icon').classList.remove('animate-spin'), 600);
-            }
-            
-            const selectedFilter = document.getElementById('tech-filter').value;
-            let devices = data.devices;
+            const select = document.getElementById('modalTechSelect');
+            select.innerHTML = '<option value="Unassigned">Unassigned</option>';
+            allTechs.forEach(t => {
+                select.innerHTML += `<option value="${t.name}" ${device.assigned_tech === t.name ? 'selected' : ''}>${t.name}</option>`;
+            });
 
-            // Apply Technician Filter if selected
-            if (selectedFilter !== 'ALL') {
-                devices = devices.filter(d => d.assigned_tech === selectedFilter);
-            }
-
-            const criticalList = document.getElementById('critical-list');
-            const warningList = document.getElementById('warning-list');
-            const offlineList = document.getElementById('offline-list');
-            const healthyList = document.getElementById('healthy-list');
-            
-            criticalList.innerHTML = '';
-            warningList.innerHTML = '';
-            offlineList.innerHTML = '';
-            healthyList.innerHTML = '';
-
-            const criticals = devices.filter(d => d.status === 'RED');
-            const warnings = devices.filter(d => d.status === 'AMBER');
-            const networkDrops = devices.filter(d => d.status === 'OFFLINE_NETWORK_DROP');
-            const healthies = devices.filter(d => d.status === 'GREEN');
-
-            document.getElementById('critical-count').innerText = `${criticals.length} Machines`;
-            document.getElementById('warning-count').innerText = `${warnings.length} Machines`;
-            document.getElementById('offline-count').innerText = `${networkDrops.length} Machines`;
-            document.getElementById('healthy-count').innerText = `${healthies.length} Machines`;
-
-            if (criticals.length === 0) criticalList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">Zero critical machines detected.</div>`;
-            else criticals.forEach(dev => criticalList.innerHTML += renderRow(dev, 'rose', 'CRITICAL / LAG', 'pulse-red'));
-
-            if (warnings.length === 0) warningList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">No warning items pending.</div>`;
-            else warnings.forEach(dev => warningList.innerHTML += renderRow(dev, 'amber', 'UPDATES PENDING', 'pulse-amber'));
-
-            if (networkDrops.length === 0) offlineList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">All active machines communicating cleanly over the network.</div>`;
-            else networkDrops.forEach(dev => offlineList.innerHTML += renderRow(dev, 'purple', '📡 NETWORK OUTAGE / UNEXPECTED DROP', 'pulse-purple'));
-
-            if (healthies.length === 0) healthyList.innerHTML = `<div class="text-slate-500 text-xs italic p-2">No compliant machines connected.</div>`;
-            else healthies.forEach(dev => healthyList.innerHTML += renderRow(dev, 'emerald', '100% Compliant', 'pulse-green'));
+            document.getElementById('deviceModal').classList.remove('hidden');
         }
 
-        function renderRow(dev, color, labelText, pulseClass) {
-            let badgeStyle = '';
-            if (color === 'rose') badgeStyle = 'bg-rose-950 text-rose-300 border-rose-800';
-            else if (color === 'amber') badgeStyle = 'bg-amber-950 text-amber-300 border-amber-800';
-            else if (color === 'purple') badgeStyle = 'bg-purple-950 text-purple-300 border-purple-800';
-            else if (color === 'emerald') badgeStyle = 'bg-emerald-950 text-emerald-300 border-emerald-800';
-            else badgeStyle = 'bg-slate-800 text-slate-400 border-slate-700';
-
-            let dotColor = 'bg-slate-500';
-            if (color === 'rose') dotColor = 'bg-rose-500';
-            if (color === 'amber') dotColor = 'bg-amber-500';
-            if (color === 'purple') dotColor = 'bg-purple-500';
-            if (color === 'emerald') dotColor = 'bg-emerald-500';
-
-            return `
-                <div onclick='openActionModal(${JSON.stringify(dev)})' class="flex justify-between items-center py-2.5 px-3 hover:bg-slate-800/60 rounded-lg cursor-pointer transition text-xs">
-                    <div class="flex items-center space-x-3">
-                        <span class="w-2.5 h-2.5 rounded-full ${dotColor} ${pulseClass}"></span>
-                        <span class="font-bold text-slate-100">${dev.hostname}</span>
-                        <span class="text-sky-400 font-mono">(${dev.ip_address})</span>
-                        <span class="text-slate-400">• ${dev.user_details.full_name} (${dev.user_details.department})</span>
-                    </div>
-                    <div class="flex items-center space-x-3">
-                        <span class="text-slate-400">Assigned: <strong class="text-sky-300">${dev.assigned_tech || 'Unassigned'}</strong></span>
-                        <span class="px-2 py-0.5 rounded border text-[11px] font-bold ${badgeStyle}">${labelText}</span>
-                        <span class="text-slate-400">Ext: ${dev.user_details.phone_ext}</span>
-                        <span class="text-sky-400 hover:text-sky-300 font-semibold">Inspect ➔</span>
-                    </div>
-                </div>
-            `;
-        }
-
-        async function populateMockFleet() {
-            await fetch('/api/demo/populate-mock', { method: 'POST' });
-            fetchFleetData();
-        }
-
-        async function reassignMachine(hostname, newTech) {
+        async function reassignDevice(techName) {
+            if (!currentDevice) return;
             await fetch('/api/admin/reassign', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ hostname: hostname, tech_name: newTech })
+                body: JSON.stringify({ hostname: currentDevice.hostname, tech_name: techName })
             });
-            const alert = document.getElementById('modal-alert');
-            alert.classList.remove('hidden');
-            alert.innerText = `[REASSIGNED] ${hostname} assigned to ${newTech}!`;
-            setTimeout(() => fetchFleetData(), 800);
+            loadFleetData();
         }
 
-        async function remediateHost(hostname) {
-            const res = await fetch(`/api/admin/remediate/${hostname}`, { method: 'POST' });
-            const alert = document.getElementById('modal-alert');
-            alert.classList.remove('hidden');
-            alert.innerText = `[REMEDIATED] ${hostname} marked as Healthy and moved to Compliant Fleet!`;
-            setTimeout(() => {
-                closeModal();
-                fetchFleetData();
-            }, 1200);
-        }
-
-        async function triggerCommand(hostname, command) {
-            const res = await fetch('/api/admin/command', {
+        async function sendRemoteCommand(cmd) {
+            if (!currentDevice) return;
+            await fetch('/api/admin/command', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ hostname: hostname, command: command })
+                body: JSON.stringify({ hostname: currentDevice.hostname, command: cmd })
             });
-            const alert = document.getElementById('modal-alert');
-            alert.classList.remove('hidden');
-            alert.innerText = `[QUEUED] Command '${command}' dispatched to ${hostname}...`;
-            setTimeout(() => checkCommandFeedback(hostname), 3000);
+            alert(`Queued command '${cmd}' for ${currentDevice.hostname}`);
         }
 
-        async function checkCommandFeedback(hostname) {
-            const res = await fetch(`/api/admin/command-result/${hostname}`);
-            const data = await res.json();
-            if (data.results && data.results.length > 0) {
-                const latest = data.results[0];
-                const alert = document.getElementById('modal-alert');
-                alert.classList.remove('hidden');
-                alert.innerText = `[EXECUTED] ${latest.command}: ${latest.output}`;
-            }
-        }
-
-        async function launchRDPSession(ipAddress) {
-            const res = await fetch('/api/admin/launch-rdp', {
+        async function launchRDP() {
+            if (!currentDevice) return;
+            await fetch('/api/admin/launch-rdp', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ip: ipAddress })
+                body: JSON.stringify({ ip: currentDevice.ip_address })
             });
-            const data = await res.json();
-            const alert = document.getElementById('modal-alert');
-            alert.classList.remove('hidden');
-            if (data.status === 'SUCCESS') alert.innerText = `[RDP LAUNCHED] Opening mstsc.exe session to ${ipAddress}...`;
-            else alert.innerText = `[RDP ERROR] ${data.message}`;
         }
 
-        function openActionModal(dev) {
-            document.getElementById('action-modal').classList.remove('hidden');
-            document.getElementById('modal-alert').classList.add('hidden');
-            document.getElementById('modal-hostname').innerText = `${dev.hostname} (${dev.user_details.full_name})`;
-            document.getElementById('modal-ip').innerText = `Target IP Address: ${dev.ip_address}`;
-            
-            const onDutyTechs = GLOBAL_TECHS.filter(t => t.status === 'ON_DUTY');
-            let techOptions = `<option value="Unassigned">Unassigned</option>`;
-            onDutyTechs.forEach(t => {
-                techOptions += `<option value="${t.name}" ${dev.assigned_tech === t.name ? 'selected' : ''}>${t.name}</option>`;
+        async function overrideRemediate() {
+            if (!currentDevice) return;
+            await fetch(`/api/admin/remediate/${currentDevice.hostname}`, { method: 'POST' });
+            closeDeviceModal();
+            loadFleetData();
+        }
+
+        async function loadFleetData() {
+            const techsRes = await fetch('/api/techs');
+            const techsData = await techsRes.json();
+            allTechs = techsData.techs;
+            const techContainer = document.getElementById('techs-container');
+            techContainer.innerHTML = '';
+
+            allTechs.forEach(t => {
+                techContainer.innerHTML += `
+                    <div class="bg-gray-900 p-3 rounded-lg border border-gray-800 flex justify-between items-center">
+                        <div>
+                            <p class="font-bold text-sm text-white">${t.name}</p>
+                            <p class="text-xs text-gray-500">${t.email}</p>
+                        </div>
+                        <select onchange="updateDutyStatus('${t.id}', this.value)" class="bg-gray-800 border border-gray-700 text-xs text-white rounded p-1">
+                            <option value="ACTIVE" ${t.status === 'ACTIVE' ? 'selected' : ''}>🟢 Active</option>
+                            <option value="OUT_OF_OFFICE" ${t.status === 'OUT_OF_OFFICE' ? 'selected' : ''}>🟡 Out of Office</option>
+                            <option value="ON_LEAVE" ${t.status === 'ON_LEAVE' ? 'selected' : ''}>🔴 On Leave</option>
+                        </select>
+                    </div>
+                `;
             });
 
-            const body = document.getElementById('modal-body');
-            body.innerHTML = `
-                <div class="p-3 bg-slate-900 rounded-lg space-y-1.5 text-xs border border-slate-800">
-                    <div class="flex justify-between items-center mb-1">
-                        <span class="font-bold text-sky-400">Dispatch & Assignment</span>
-                        <div class="flex items-center space-x-2">
-                            <span class="text-slate-400">Assigned Tech:</span>
-                            <select onchange="reassignMachine('${dev.hostname}', this.value)" class="bg-slate-800 text-sky-300 border border-slate-700 rounded px-2 py-0.5 font-bold">
-                                ${techOptions}
-                            </select>
+            const slaRes = await fetch('/api/analytics/sla');
+            const slaData = await slaRes.json();
+            document.getElementById('sla-mttr').innerText = slaData.mean_time_to_remediate_seconds + "s";
+            document.getElementById('sla-resolved').innerText = slaData.total_resolved_incidents;
+
+            const devRes = await fetch('/api/fleet/devices');
+            const devData = await devRes.json();
+
+            const crit = document.getElementById('critical-devices');
+            const amb = document.getElementById('amber-devices');
+            const grn = document.getElementById('green-devices');
+
+            crit.innerHTML = ''; amb.innerHTML = ''; grn.innerHTML = '';
+
+            devData.devices.forEach(d => {
+                const userFull = d.user_details.full_name || d.logged_user || 'Unassigned';
+                const userEmail = d.user_details.email || `${d.logged_user || 'user'}@company.com`;
+                const dStr = JSON.stringify(d).replace(/"/g, '&quot;');
+
+                const html = `
+                    <div class="bg-gray-900 p-3 rounded-lg border border-gray-800 flex justify-between items-center text-sm hover:border-gray-700 transition">
+                        <div>
+                            <span class="font-bold text-white">${d.hostname}</span>
+                            <span class="text-xs text-gray-400 ml-2">(${d.ip_address}) • ${userFull} &lt;${userEmail}&gt;</span>
+                            <span class="text-xs text-indigo-400 ml-3">Assigned: ${d.assigned_tech}</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="inspectDevice(${dStr})" class="px-3 py-1 bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs font-semibold rounded border border-gray-700 flex items-center gap-1">
+                                <i class="fa-solid fa-sliders text-indigo-400"></i> Inspect & Control
+                            </button>
+                            ${d.status === 'RED' ? `<button onclick="overrideRemediateDevice('${d.hostname}')" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded">Mark Remediated</button>` : ''}
                         </div>
                     </div>
-                </div>
+                `;
 
-                <div class="p-3 bg-slate-900 rounded-lg space-y-1.5 text-xs border border-slate-800">
-                    <div class="font-bold text-sky-400">System & Hardware Specs</div>
-                    <div>• OS Build: ${dev.os_info.product_name} ${dev.os_info.display_version} (Build ${dev.os_info.build_number})</div>
-                    <div>• Pending Updates: <span class="${dev.update_info.pending_updates_count > 5 ? 'text-rose-400 font-bold' : 'text-amber-300'}">${dev.update_info.pending_updates_count} updates</span></div>
-                    <div>• Free Disk Space: <span class="${dev.hardware_info.free_disk_gb < 10 ? 'text-rose-400 font-bold' : 'text-slate-300'}">${dev.hardware_info.free_disk_gb} GB</span></div>
-                </div>
-
-                <div class="p-3 bg-slate-900 rounded-lg space-y-1.5 text-xs border border-slate-800">
-                    <div class="font-bold text-sky-400">Active Directory Profile</div>
-                    <div>• Email: <a href="mailto:${dev.user_details.email}" class="text-sky-300 underline">${dev.user_details.email}</a></div>
-                    <div>• IP Phone Extension: <span class="text-emerald-400 font-mono font-bold">${dev.user_details.phone_ext}</span></div>
-                    <div>• Department: ${dev.user_details.department}</div>
-                </div>
-
-                <div class="p-3 bg-slate-900 rounded-lg space-y-2 text-xs border border-slate-800">
-                    <div class="font-bold text-sky-400 mb-1">Instant IT Remediation Commands</div>
-                    <div class="grid grid-cols-2 gap-2">
-                        <button onclick="triggerCommand('${dev.hostname}', 'FLUSH_DNS')" class="p-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded border border-slate-700 transition">🧹 Flush DNS Cache</button>
-                        <button onclick="triggerCommand('${dev.hostname}', 'RESTART_WUAUSERV')" class="p-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded border border-slate-700 transition">🔄 Restart WU Service</button>
-                        <button onclick="triggerCommand('${dev.hostname}', 'CHECK_UPDATES')" class="p-2 bg-sky-900 hover:bg-sky-800 text-sky-200 text-xs font-semibold rounded border border-sky-700 col-span-2 transition">🚀 Force Windows Update Scan</button>
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-2 gap-2 pt-1">
-                    <button onclick="launchRDPSession('${dev.ip_address}')" class="py-2.5 bg-emerald-800 hover:bg-emerald-700 text-white font-bold text-xs rounded border border-emerald-600 transition flex items-center justify-center space-x-1">
-                        <span>🖥️ RDP Session</span>
-                    </button>
-                    <button onclick="remediateHost('${dev.hostname}')" class="py-2.5 bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs rounded border border-sky-400 transition flex items-center justify-center space-x-1">
-                        <span>✅ Mark Remediated</span>
-                    </button>
-                </div>
-            `;
+                if (d.status === 'RED') crit.innerHTML += html;
+                else if (d.status === 'AMBER' || d.status === 'OFFLINE_NETWORK_DROP') amb.innerHTML += html;
+                else grn.innerHTML += html;
+            });
         }
 
-        function closeModal() {
-            document.getElementById('action-modal').classList.add('hidden');
+        async function overrideRemediateDevice(hostname) {
+            await fetch(`/api/admin/remediate/${hostname}`, { method: 'POST' });
+            loadFleetData();
         }
 
-        fetchFleetData();
-        setInterval(fetchFleetData, 5000);
+        loadFleetData();
+        setInterval(loadFleetData, 10000);
     </script>
 </body>
 </html>
