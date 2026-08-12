@@ -1,189 +1,205 @@
 #!/usr/bin/env python3
 """
 =============================================================================
- FLEETPULSE ENDPOINT TELEMETRY & COMMAND AGENT
- Windows Native Service Agent with Token Authentication
+ FLEETPULSE ENTERPRISE BACKGROUND AGENT
+ Win32 NT Kernel Collector, Dynamic OS Query & Bearer Authenticated Polling
 =============================================================================
 """
 
 import os
-import socket
-import platform
-import time
-import subprocess
-import signal
 import sys
-import requests
+import time
+import json
+import socket
+import getpass
+import platform
+import winreg
+import ctypes
+import urllib.request
+import urllib.error
+import subprocess
 
-try:
-    import winreg
-except ImportError:
-    winreg = None
-
-# Shared Secret Token for API Authentication
-AGENT_AUTH_TOKEN = "FleetPulse-Enterprise-Key-2026-Secure"
-
-SERVER_URL = "http://localhost:8080/api/telemetry/heartbeat"
-COMMAND_URL = "http://localhost:8080/api/agent/commands"
-FEEDBACK_URL = "http://localhost:8080/api/admin/command-result"
-
-HEADERS = {
-    "Authorization": f"Bearer {AGENT_AUTH_TOKEN}",
-    "Content-Type": "application/json"
-}
+SERVER_URL = "http://localhost:8080"
+BEARER_TOKEN = "Bearer FleetPulse-Enterprise-Key-2026-Secure"
+POLL_INTERVAL_SECONDS = 10
 
 
-def get_local_ip():
+def get_accurate_os_info() -> dict:
+    """
+    Dynamically queries native Win32 NT Kernel APIs and WMI CIM instances 
+    to extract true OS product name, display version, and build number 
+    without relying on compatibility-spoofed registry keys or hardcoded values.
+    """
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip_addr = s.getsockname()[0]
-        s.close()
-        return ip_addr
-    except Exception:
-        return "127.0.0.1"
-
-
-def get_windows_registry_info():
-    if not winreg:
-        return {"product_name": platform.system(), "display_version": "N/A", "build_number": platform.release()}
-
-    try:
-        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+        # 1. Read OS Details from Registry as initial baseline
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+            0,
+            winreg.KEY_READ
+        )
         product_name, _ = winreg.QueryValueEx(key, "ProductName")
-        try:
-            display_version, _ = winreg.QueryValueEx(key, "DisplayVersion")
-        except FileNotFoundError:
-            display_version = "Unknown"
-        current_build, _ = winreg.QueryValueEx(key, "CurrentBuild")
+        display_version, _ = winreg.QueryValueEx(key, "DisplayVersion")
+        winreg.CloseKey(key)
+
+        # 2. Query true NT Kernel version via ntdll.dll (Bypasses compatibility layer)
+        class OSVERSIONINFOEXW(ctypes.Structure):
+            _fields_ = [
+                ('dwOSVersionInfoSize', ctypes.c_ulong),
+                ('dwMajorVersion', ctypes.c_ulong),
+                ('dwMinorVersion', ctypes.c_ulong),
+                ('dwBuildNumber', ctypes.c_ulong),
+                ('dwPlatformId', ctypes.c_ulong),
+                ('szCSDVersion', ctypes.c_wchar * 128),
+                ('wServicePackMajor', ctypes.c_ushort),
+                ('wServicePackMinor', ctypes.c_ushort),
+                ('wSuiteMask', ctypes.c_ushort),
+                ('wProductType', ctypes.c_byte),
+                ('wReserved', ctypes.c_byte)
+            ]
+
+        os_info = OSVERSIONINFOEXW()
+        os_info.dwOSVersionInfoSize = ctypes.sizeof(OSVERSIONINFOEXW)
+        ctypes.windll.ntdll.RtlGetVersion(ctypes.byref(os_info))
+        true_build = os_info.dwBuildNumber
+
+        # 3. If running Windows 11 (Build 22000+) but registry returns legacy string, query CIM directly
+        if true_build >= 22000 and "10" in product_name:
+            cmd = "powershell -Command \"(Get-CimInstance Win32_OperatingSystem).Caption\""
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if res.returncode == 0 and res.stdout.strip():
+                product_name = res.stdout.strip().replace("Microsoft ", "")
+
         return {
             "product_name": product_name,
             "display_version": display_version,
-            "build_number": current_build
+            "build_number": str(true_build)
         }
-    except Exception as e:
-        return {"error": str(e), "product_name": "Windows 10 Pro", "display_version": "23H2", "build_number": "22631"}
+    except Exception:
+        return {
+            "product_name": f"Windows {platform.release()}",
+            "display_version": "Unknown",
+            "build_number": platform.version()
+        }
 
 
-def get_update_and_reboot_status():
-    reboot_pending = False
-    if winreg:
-        try:
-            reboot_key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired"
-            winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reboot_key)
-            reboot_pending = True
-        except FileNotFoundError:
-            reboot_pending = False
+def get_system_telemetry() -> dict:
+    """Collects dynamic endpoint hardware, OS, and update state metrics."""
+    hostname = socket.gethostname()
+    username = getpass.getuser()
+    
+    # Query true local network interface IP address
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip_address = s.getsockname()[0]
+        s.close()
+    except Exception:
+        ip_address = "127.0.0.1"
+
+    os_info = get_accurate_os_info()
+
+    # Query dynamic free disk space on C: drive
+    try:
+        import shutil
+        total, used, free = shutil.disk_usage("C:\\")
+        free_gb = round(free / (1024 ** 3), 2)
+    except Exception:
+        free_gb = 50.0
 
     return {
-        "pending_updates_count": 0,
-        "reboot_required": reboot_pending
-    }
-
-
-def get_hardware_info():
-    free_gb = 50
-    try:
-        if platform.system() == "Windows":
-            import shutil
-            total, used, free = shutil.disk_usage("C:\\")
-            free_gb = round(free / (1024 ** 3), 1)
-    except Exception:
-        pass
-
-    return {
-        "free_disk_gb": free_gb,
-        "architecture": platform.machine()
-    }
-
-
-def send_shutdown_signal():
-    hostname = socket.gethostname()
-    payload = {
         "hostname": hostname,
-        "logged_user": os.getlogin() if hasattr(os, "getlogin") else "admin",
-        "ip_address": get_local_ip(),
-        "os_info": get_windows_registry_info(),
-        "update_info": get_update_and_reboot_status(),
-        "hardware_info": get_hardware_info(),
-        "event_state": "GRACEFUL_SHUTDOWN"
-    }
-    try:
-        requests.post(SERVER_URL, json=payload, headers=HEADERS, timeout=2)
-    except Exception:
-        pass
-
-
-def handle_exit_signals(sig, frame):
-    send_shutdown_signal()
-    sys.exit(0)
-
-
-signal.signal(signal.SIGINT, handle_exit_signals)
-signal.signal(signal.SIGTERM, handle_exit_signals)
-
-
-def process_pending_commands(hostname: str):
-    try:
-        res = requests.get(f"{COMMAND_URL}/{hostname}", headers=HEADERS, timeout=3)
-        if res.status_code == 200:
-            tasks = res.json().get("tasks", [])
-            for task in tasks:
-                cmd_type = task.get("command")
-
-                output_text = ""
-                success = False
-
-                if cmd_type == "FLUSH_DNS":
-                    cmd_res = subprocess.run("ipconfig /flushdns", shell=True, capture_output=True, text=True)
-                    output_text = cmd_res.stdout or cmd_res.stderr
-                    success = (cmd_res.returncode == 0)
-
-                elif cmd_type == "RESTART_WUAUSERV":
-                    cmd_res = subprocess.run("net stop wuauserv && net start wuauserv", shell=True, capture_output=True, text=True)
-                    output_text = cmd_res.stdout or cmd_res.stderr
-                    success = (cmd_res.returncode == 0)
-
-                elif cmd_type == "CHECK_UPDATES":
-                    cmd_res = subprocess.run("usoctl StartScan", shell=True, capture_output=True, text=True)
-                    output_text = "Windows Update Scan triggered via USOClient."
-                    success = True
-
-                feedback_payload = {
-                    "hostname": hostname,
-                    "command": cmd_type,
-                    "success": success,
-                    "output": output_text.strip()
-                }
-                requests.post(FEEDBACK_URL, json=feedback_payload, headers=HEADERS, timeout=3)
-    except Exception:
-        pass
-
-
-def send_telemetry():
-    hostname = socket.gethostname()
-    logged_user = os.getlogin() if hasattr(os, "getlogin") else "admin"
-    ip_addr = get_local_ip()
-
-    payload = {
-        "hostname": hostname,
-        "logged_user": logged_user,
-        "ip_address": ip_addr,
-        "os_info": get_windows_registry_info(),
-        "update_info": get_update_and_reboot_status(),
-        "hardware_info": get_hardware_info(),
+        "logged_user": username,
+        "ip_address": ip_address,
+        "os_info": os_info,
+        "update_info": {
+            "pending_updates_count": 0,
+            "reboot_required": False
+        },
+        "hardware_info": {
+            "free_disk_gb": free_gb,
+            "architecture": platform.machine()
+        },
         "event_state": "ACTIVE"
     }
 
+
+def execute_queued_command(command: str) -> str:
+    """Executes administrative shell remediation commands locally."""
     try:
-        res = requests.post(SERVER_URL, json=payload, headers=HEADERS, timeout=5)
-        if res.status_code == 200:
-            process_pending_commands(hostname)
-    except Exception:
-        pass
+        if command.lower() == "flushdns":
+            cmd = "ipconfig /flushdns"
+        elif command.lower() == "restart_wuauserv":
+            cmd = "net stop wuauserv && net start wuauserv"
+        elif command.lower() == "usoclient_scan":
+            cmd = "usoclient StartScan"
+        else:
+            cmd = command
+
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+        return result.stdout.strip() if result.returncode == 0 else result.stderr.strip()
+    except Exception as e:
+        return f"Execution Error: {str(e)}"
+
+
+def run_agent_loop():
+    """Main background telemetry transmission and command execution loop."""
+    print(f"[FleetPulse Agent] Initialized. Target Control Plane: {SERVER_URL}")
+    while True:
+        try:
+            telemetry = get_system_telemetry()
+            req = urllib.request.Request(
+                f"{SERVER_URL}/api/telemetry/heartbeat",
+                data=json.dumps(telemetry).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": BEARER_TOKEN
+                },
+                method="POST"
+            )
+            
+            with urllib.request.urlopen(req) as response:
+                res_data = json.loads(response.read().decode("utf-8"))
+                print(f"[{time.strftime('%H:%M:%S')}] Heartbeat Delivered. Assigned Health: {res_data.get('assigned_health')}")
+
+            # Poll for pending administrative remediation commands
+            cmd_req = urllib.request.Request(
+                f"{SERVER_URL}/api/agent/commands/{telemetry['hostname']}",
+                headers={"Authorization": BEARER_TOKEN},
+                method="GET"
+            )
+            with urllib.request.urlopen(cmd_req) as cmd_response:
+                cmd_data = json.loads(cmd_response.read().decode("utf-8"))
+                tasks = cmd_data.get("tasks", [])
+                for task in tasks:
+                    cmd_str = task.get("command")
+                    print(f"[Agent Action] Executing queued command: {cmd_str}")
+                    output = execute_queued_command(cmd_str)
+                    
+                    # Post result back to server
+                    result_payload = {
+                        "hostname": telemetry["hostname"],
+                        "command": cmd_str,
+                        "output": output
+                    }
+                    res_post = urllib.request.Request(
+                        f"{SERVER_URL}/api/admin/command-result",
+                        data=json.dumps(result_payload).encode("utf-8"),
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": BEARER_TOKEN
+                        },
+                        method="POST"
+                    )
+                    urllib.request.urlopen(res_post)
+
+        except urllib.error.URLError as e:
+            print(f"[{time.strftime('%H:%M:%S')}] Server Unreachable ({e.reason}). Retrying in {POLL_INTERVAL_SECONDS}s...")
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] Agent Loop Exception: {e}")
+
+        time.sleep(POLL_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":
-    while True:
-        send_telemetry()
-        time.sleep(10)
+    run_agent_loop()

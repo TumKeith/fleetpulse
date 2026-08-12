@@ -2,7 +2,7 @@
 """
 =============================================================================
  FLEETPULSE CENTRAL IT COMMAND SERVER
- Multi-Technician Dispatch, SQLite Storage & Token Authentication
+ Multi-Technician Dispatch, SQLite Storage, LDAP Active Directory & Email Alerts
 =============================================================================
 """
 
@@ -10,12 +10,14 @@ import os
 import json
 import time
 import subprocess
+import threading
 from typing import Dict, List
 from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 import database as db
+import notifier
 
 app = FastAPI(title="FleetPulse IT Management Console")
 
@@ -30,7 +32,11 @@ EXPECTED_AGENT_TOKEN = "Bearer FleetPulse-Enterprise-Key-2026-Secure"
 COMMAND_QUEUE: Dict[str, List[dict]] = {}
 COMMAND_RESULTS: Dict[str, List[dict]] = {}
 
-MOCK_AD_DIRECTORY = {
+# Active Directory Domain Controller LDAP Settings (Optional Configuration)
+AD_LDAP_SERVER = os.getenv("AD_LDAP_SERVER", "ldap://domaincontroller.company.local")
+AD_DOMAIN_SUFFIX = "@company.com"
+
+FALLBACK_AD_DIRECTORY = {
     "admin": {"full_name": "System Administrator", "department": "IT Infrastructure", "email": "admin@company.com", "phone_ext": "4000"},
     "jdoe": {"full_name": "Jane Doe", "department": "Finance", "email": "jdoe@company.com", "phone_ext": "4401"},
     "mwilson": {"full_name": "Mark Wilson", "department": "Engineering", "email": "mwilson@company.com", "phone_ext": "4402"},
@@ -40,12 +46,38 @@ MOCK_AD_DIRECTORY = {
     "dchen": {"full_name": "David Chen", "department": "Logistics", "email": "dchen@company.com", "phone_ext": "4406"},
 }
 
+def query_active_directory_ldap(username: str) -> dict:
+    """
+    Attempts a live LDAP query against Active Directory Domain Controller.
+    Falls back to structured AD directory mapping if LDAP is unconfigured or offline.
+    """
+    try:
+        import ldap3
+        server = ldap3.Server(AD_LDAP_SERVER, get_info=ldap3.ALL)
+        conn = ldap3.Connection(server, auto_bind=True)
+        search_filter = f"(sAMAccountName={username})"
+        conn.search("dc=company,dc=local", search_filter, attributes=['displayName', 'department', 'mail', 'telephoneNumber'])
+        
+        if conn.entries:
+            entry = conn.entries[0]
+            return {
+                "full_name": str(entry.displayName) if 'displayName' in entry else username,
+                "department": str(entry.department) if 'department' in entry else "General",
+                "email": str(entry.mail) if 'mail' in entry else f"{username}{AD_DOMAIN_SUFFIX}",
+                "phone_ext": str(entry.telephoneNumber) if 'telephoneNumber' in entry else "N/A"
+            }
+    except Exception:
+        pass  # Graceful fallback to cached AD profile
+
+    return FALLBACK_AD_DIRECTORY.get(
+        username,
+        {"full_name": username.title() if username else "Unassigned", "department": "General Domain User", "email": f"{username}{AD_DOMAIN_SUFFIX}", "phone_ext": "N/A"}
+    )
 
 def verify_agent_token(authorization: str = Header(None)):
     """Verifies that incoming agent requests contain a valid Authorization token."""
     if authorization != EXPECTED_AGENT_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized Agent Access")
-
 
 def calculate_health_status(os_info: dict, update_info: dict, hw_info: dict, event_state: str) -> str:
     if event_state == "GRACEFUL_SHUTDOWN":
@@ -60,7 +92,6 @@ def calculate_health_status(os_info: dict, update_info: dict, hw_info: dict, eve
     if reboot_needed or pending_updates > 0:
         return "AMBER"
     return "GREEN"
-
 
 def auto_assign_technician() -> str:
     techs = db.get_all_techs()
@@ -77,21 +108,17 @@ def auto_assign_technician() -> str:
 
     return min(counts, key=counts.get)
 
-
 @app.get("/", response_class=HTMLResponse)
 async def render_dashboard(request: Request):
     return templates.TemplateResponse(request=request, name="dashboard.html")
-
 
 @app.get("/tech", response_class=HTMLResponse)
 async def render_tech_portal(request: Request):
     return templates.TemplateResponse(request=request, name="tech_portal.html")
 
-
 @app.get("/api/techs")
 async def get_technicians():
     return {"techs": db.get_all_techs()}
-
 
 @app.post("/api/techs/duty/{tech_id}")
 async def toggle_tech_duty(tech_id: str, payload: dict):
@@ -99,7 +126,6 @@ async def toggle_tech_duty(tech_id: str, payload: dict):
     db.update_tech_status(tech_id, new_status)
     db.log_audit_event("SYSTEM", tech_id, "DUTY_CHANGE", f"Status changed to {new_status}")
     return {"status": "SUCCESS"}
-
 
 @app.post("/api/telemetry/heartbeat")
 async def receive_heartbeat(data: dict, authorization: str = Header(None)):
@@ -109,10 +135,7 @@ async def receive_heartbeat(data: dict, authorization: str = Header(None)):
     username = data.get("logged_user", "").lower()
     event_state = data.get("event_state", "ACTIVE")
 
-    ad_profile = MOCK_AD_DIRECTORY.get(
-        username, 
-        {"full_name": username or "Unassigned", "department": "General", "email": f"{username}@company.com", "phone_ext": "N/A"}
-    )
+    ad_profile = query_active_directory_ldap(username)
 
     status = calculate_health_status(
         data.get("os_info", {}),
@@ -122,7 +145,9 @@ async def receive_heartbeat(data: dict, authorization: str = Header(None)):
     )
 
     existing_devices = {d["hostname"]: d for d in db.get_all_devices()}
-    existing_tech = existing_devices.get(hostname, {}).get("assigned_tech")
+    previous_device = existing_devices.get(hostname, {})
+    previous_status = previous_device.get("status", "UNKNOWN")
+    existing_tech = previous_device.get("assigned_tech")
     
     if not existing_tech or existing_tech == "Unassigned":
         assigned_tech = auto_assign_technician() if status in ["RED", "AMBER", "OFFLINE_NETWORK_DROP"] else "Unassigned"
@@ -145,8 +170,25 @@ async def receive_heartbeat(data: dict, authorization: str = Header(None)):
     }
 
     db.save_device(device_payload)
-    return {"status": "SUCCESS", "assigned_health": status}
 
+    # 🚨 SMART CRITICAL ALERTING: Non-blocking email alert triggered ONLY on state transition into RED
+    if status == "RED" and previous_status != "RED":
+        pending_updates = data.get("update_info", {}).get("pending_updates_count", 0)
+        free_disk = data.get("hardware_info", {}).get("free_disk_gb", "N/A")
+        issue_summary = f"Disk Space: {free_disk}GB Free | Pending Updates: {pending_updates}"
+
+        alert_thread = threading.Thread(
+            target=notifier.send_critical_alert,
+            args=(
+                hostname,
+                data.get("ip_address", "127.0.0.1"),
+                ad_profile.get("full_name", username),
+                issue_summary
+            )
+        )
+        alert_thread.start()
+
+    return {"status": "SUCCESS", "assigned_health": status}
 
 @app.get("/api/fleet/devices")
 async def get_fleet_devices():
@@ -164,7 +206,6 @@ async def get_fleet_devices():
 
     return {"devices": devices}
 
-
 @app.post("/api/admin/reassign")
 async def reassign_machine(payload: dict):
     hostname = payload.get("hostname")
@@ -175,7 +216,6 @@ async def reassign_machine(payload: dict):
         db.log_audit_event(hostname, "ADMIN", "REASSIGN", f"Assigned to {tech_name}")
         return {"status": "SUCCESS"}
     return JSONResponse({"status": "ERROR", "message": "Missing parameters"}, status_code=400)
-
 
 @app.post("/api/admin/remediate/{hostname}")
 async def remediate_device(hostname: str):
@@ -189,7 +229,6 @@ async def remediate_device(hostname: str):
         db.log_audit_event(hostname, "TECH", "REMEDIATED", "Marked issue as resolved")
         return {"status": "SUCCESS"}
     return JSONResponse({"status": "ERROR", "message": "Host not found"}, status_code=404)
-
 
 @app.post("/api/admin/command")
 async def queue_admin_command(payload: dict):
@@ -206,7 +245,6 @@ async def queue_admin_command(payload: dict):
     db.log_audit_event(hostname, "ADMIN", "COMMAND_QUEUED", command)
     return {"status": "QUEUED", "hostname": hostname, "command": command}
 
-
 @app.post("/api/admin/command-result")
 async def store_command_result(payload: dict, authorization: str = Header(None)):
     verify_agent_token(authorization)
@@ -218,11 +256,9 @@ async def store_command_result(payload: dict, authorization: str = Header(None))
         db.log_audit_event(hostname, "AGENT", "COMMAND_EXECUTED", f"{payload.get('command')}: {payload.get('output')}")
     return {"status": "RECORDED"}
 
-
 @app.get("/api/admin/command-result/{hostname}")
 async def get_command_results(hostname: str):
     return {"results": COMMAND_RESULTS.get(hostname, [])}
-
 
 @app.get("/api/agent/commands/{hostname}")
 async def get_agent_commands(hostname: str, authorization: str = Header(None)):
@@ -230,7 +266,6 @@ async def get_agent_commands(hostname: str, authorization: str = Header(None)):
     tasks = COMMAND_QUEUE.get(hostname, [])
     COMMAND_QUEUE[hostname] = []
     return {"tasks": tasks}
-
 
 @app.post("/api/admin/launch-rdp")
 async def launch_rdp_session(payload: dict):
@@ -245,14 +280,13 @@ async def launch_rdp_session(payload: dict):
     except Exception as e:
         return JSONResponse({"status": "ERROR", "message": str(e)}, status_code=500)
 
-
 @app.post("/api/demo/populate-mock")
 async def populate_mock_fleet():
     mock_pcs = [
         {
             "hostname": "FIN-DESK-042",
             "logged_user": "jdoe",
-            "user_details": MOCK_AD_DIRECTORY["jdoe"],
+            "user_details": FALLBACK_AD_DIRECTORY["jdoe"],
             "os_info": {"product_name": "Windows 10 Pro", "display_version": "21H2", "build_number": "19044"},
             "update_info": {"pending_updates_count": 12, "reboot_required": True},
             "hardware_info": {"free_disk_gb": 8.2, "architecture": "x86_64"},
@@ -266,7 +300,7 @@ async def populate_mock_fleet():
         {
             "hostname": "ENG-WORKSTATION-01",
             "logged_user": "mwilson",
-            "user_details": MOCK_AD_DIRECTORY["mwilson"],
+            "user_details": FALLBACK_AD_DIRECTORY["mwilson"],
             "os_info": {"product_name": "Windows 11 Pro", "display_version": "23H2", "build_number": "22631"},
             "update_info": {"pending_updates_count": 3, "reboot_required": False},
             "hardware_info": {"free_disk_gb": 240.5, "architecture": "x86_64"},
@@ -280,7 +314,7 @@ async def populate_mock_fleet():
         {
             "hostname": "SALES-LAPTOP-04",
             "logged_user": "bmbatha",
-            "user_details": MOCK_AD_DIRECTORY["bmbatha"],
+            "user_details": FALLBACK_AD_DIRECTORY["bmbatha"],
             "os_info": {"product_name": "Windows 11 Pro", "display_version": "23H2", "build_number": "22631"},
             "update_info": {"pending_updates_count": 0, "reboot_required": False},
             "hardware_info": {"free_disk_gb": 95.0, "architecture": "x86_64"},
@@ -294,7 +328,7 @@ async def populate_mock_fleet():
         {
             "hostname": "LOGISTICS-DESK-01",
             "logged_user": "dchen",
-            "user_details": MOCK_AD_DIRECTORY["dchen"],
+            "user_details": FALLBACK_AD_DIRECTORY["dchen"],
             "os_info": {"product_name": "Windows 10 Pro", "display_version": "22H2", "build_number": "19045"},
             "update_info": {"pending_updates_count": 0, "reboot_required": False},
             "hardware_info": {"free_disk_gb": 150.0, "architecture": "x86_64"},
@@ -308,7 +342,7 @@ async def populate_mock_fleet():
         {
             "hostname": "HR-LAPTOP-09",
             "logged_user": "akarr",
-            "user_details": MOCK_AD_DIRECTORY["akarr"],
+            "user_details": FALLBACK_AD_DIRECTORY["akarr"],
             "os_info": {"product_name": "Windows 11 Pro", "display_version": "23H2", "build_number": "22631"},
             "update_info": {"pending_updates_count": 0, "reboot_required": False},
             "hardware_info": {"free_disk_gb": 115.0, "architecture": "x86_64"},
@@ -325,7 +359,6 @@ async def populate_mock_fleet():
         db.save_device(pc)
 
     return {"status": "SUCCESS", "added": len(mock_pcs)}
-
 
 if __name__ == "__main__":
     import uvicorn
