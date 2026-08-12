@@ -2,7 +2,8 @@
 """
 =============================================================================
  FLEETPULSE CENTRAL IT COMMAND SERVER
- Multi-Technician Dispatch, SQLite Storage, LDAP Active Directory & Email Alerts
+ Multi-Technician Dispatch, Dynamic Email/Identity Pipeline, SLA MTTR Tracking,
+ & Responsive Shift Re-Assignment Engine
 =============================================================================
 """
 
@@ -32,46 +33,46 @@ EXPECTED_AGENT_TOKEN = "Bearer FleetPulse-Enterprise-Key-2026-Secure"
 COMMAND_QUEUE: Dict[str, List[dict]] = {}
 COMMAND_RESULTS: Dict[str, List[dict]] = {}
 
-# Active Directory Domain Controller LDAP Settings (Optional Configuration)
-AD_LDAP_SERVER = os.getenv("AD_LDAP_SERVER", "ldap://domaincontroller.company.local")
-AD_DOMAIN_SUFFIX = "@company.com"
-
+# Fallback Directory Data
 FALLBACK_AD_DIRECTORY = {
-    "admin": {"full_name": "System Administrator", "department": "IT Infrastructure", "email": "admin@company.com", "phone_ext": "4000"},
-    "jdoe": {"full_name": "Jane Doe", "department": "Finance", "email": "jdoe@company.com", "phone_ext": "4401"},
-    "mwilson": {"full_name": "Mark Wilson", "department": "Engineering", "email": "mwilson@company.com", "phone_ext": "4402"},
-    "akarr": {"full_name": "Alex Karr", "department": "Human Resources", "email": "akarr@company.com", "phone_ext": "4403"},
-    "cwilliams": {"full_name": "Claire Williams", "department": "Legal", "email": "cwilliams@company.com", "phone_ext": "4404"},
-    "bmbatha": {"full_name": "Bernard Mbatha", "department": "Sales", "email": "bmbatha@company.com", "phone_ext": "4405"},
-    "dchen": {"full_name": "David Chen", "department": "Logistics", "email": "dchen@company.com", "phone_ext": "4406"},
+    "admin": {"full_name": "System Administrator", "department": "IT Infrastructure", "email": "admin@company.com"},
+    "jdoe": {"full_name": "Jane Doe", "department": "Finance", "email": "jdoe@company.com"},
+    "mwilson": {"full_name": "Mark Wilson", "department": "Engineering", "email": "mwilson@company.com"},
 }
 
-def query_active_directory_ldap(username: str) -> dict:
-    """
-    Attempts a live LDAP query against Active Directory Domain Controller.
-    Falls back to structured AD directory mapping if LDAP is unconfigured or offline.
-    """
-    try:
-        import ldap3
-        server = ldap3.Server(AD_LDAP_SERVER, get_info=ldap3.ALL)
-        conn = ldap3.Connection(server, auto_bind=True)
-        search_filter = f"(sAMAccountName={username})"
-        conn.search("dc=company,dc=local", search_filter, attributes=['displayName', 'department', 'mail', 'telephoneNumber'])
-        
-        if conn.entries:
-            entry = conn.entries[0]
-            return {
-                "full_name": str(entry.displayName) if 'displayName' in entry else username,
-                "department": str(entry.department) if 'department' in entry else "General",
-                "email": str(entry.mail) if 'mail' in entry else f"{username}{AD_DOMAIN_SUFFIX}",
-                "phone_ext": str(entry.telephoneNumber) if 'telephoneNumber' in entry else "N/A"
-            }
-    except Exception:
-        pass  # Graceful fallback to cached AD profile
+def resolve_department_from_identity(hostname: str, username: str, email: str) -> str:
+    """Dynamically infers or resolves department context from email or hostname conventions."""
+    if email and "@" in email:
+        domain = email.split("@")[-1].lower()
+        parts = domain.split(".")
+        if len(parts) > 2:
+            subdomain = parts[0]
+            if subdomain in ["students", "student"]:
+                return "Academic / Student Body"
+            elif subdomain in ["staff", "faculty"]:
+                return "Faculty / Staff"
+            elif subdomain in ["eng", "engineering"]:
+                return "Engineering"
 
+    host_upper = hostname.upper()
+    if host_upper.startswith("FIN"):
+        return "Finance & Accounting"
+    elif host_upper.startswith("ENG"):
+        return "Engineering & R&D"
+    elif host_upper.startswith("SALES") or host_upper.startswith("MKT"):
+        return "Sales & Marketing"
+    elif host_upper.startswith("HR"):
+        return "Human Resources"
+    elif host_upper.startswith("LOG"):
+        return "Logistics & Operations"
+
+    return "General Operations"
+
+def query_active_directory_ldap(username: str) -> dict:
+    """Fallback directory profile resolution."""
     return FALLBACK_AD_DIRECTORY.get(
         username,
-        {"full_name": username.title() if username else "Unassigned", "department": "General Domain User", "email": f"{username}{AD_DOMAIN_SUFFIX}", "phone_ext": "N/A"}
+        {"full_name": username.title() if username else "Unassigned", "department": "General Operations", "email": f"{username}@company.com"}
     )
 
 def verify_agent_token(authorization: str = Header(None)):
@@ -94,8 +95,9 @@ def calculate_health_status(os_info: dict, update_info: dict, hw_info: dict, eve
     return "GREEN"
 
 def auto_assign_technician() -> str:
+    """Routes critical tasks exclusively to technicians who are ACTIVE on duty."""
     techs = db.get_all_techs()
-    on_duty_techs = [t["name"] for t in techs if t["status"] == "ON_DUTY"]
+    on_duty_techs = [t["name"] for t in techs if t["status"] == "ACTIVE"]
     if not on_duty_techs:
         return "Unassigned"
 
@@ -108,6 +110,7 @@ def auto_assign_technician() -> str:
 
     return min(counts, key=counts.get)
 
+# --- Web Views ---
 @app.get("/", response_class=HTMLResponse)
 async def render_dashboard(request: Request):
     return templates.TemplateResponse(request=request, name="dashboard.html")
@@ -116,17 +119,57 @@ async def render_dashboard(request: Request):
 async def render_tech_portal(request: Request):
     return templates.TemplateResponse(request=request, name="tech_portal.html")
 
+# --- Technician Management Endpoints ---
 @app.get("/api/techs")
 async def get_technicians():
     return {"techs": db.get_all_techs()}
 
+@app.post("/api/techs/create")
+async def create_technician(payload: dict):
+    name = payload.get("name")
+    email = payload.get("email")
+    if not name or not email:
+        return JSONResponse({"status": "ERROR", "message": "Name and email are required"}, status_code=400)
+    
+    tech_id = f"TECH_{int(time.time())}"
+    try:
+        db.add_technician(tech_id, name, email, "ACTIVE")
+        db.log_audit_event("SYSTEM", "ADMIN", "TECH_CREATED", f"Created technician {name} ({email})")
+        return {"status": "SUCCESS", "tech_id": tech_id}
+    except Exception as e:
+        return JSONResponse({"status": "ERROR", "message": str(e)}, status_code=400)
+
 @app.post("/api/techs/duty/{tech_id}")
 async def toggle_tech_duty(tech_id: str, payload: dict):
-    new_status = payload.get("status", "ON_DUTY")
+    new_status = payload.get("status", "ACTIVE")
     db.update_tech_status(tech_id, new_status)
-    db.log_audit_event("SYSTEM", tech_id, "DUTY_CHANGE", f"Status changed to {new_status}")
+    db.log_audit_event("SYSTEM", tech_id, "DUTY_CHANGE", f"Status updated to {new_status}")
+
+    # 🚨 DYNAMIC RE-ASSIGNMENT ENGINE
+    # If technician goes off-duty, automatically re-route their active tickets
+    if new_status in ["OUT_OF_OFFICE", "ON_LEAVE"]:
+        techs = db.get_all_techs()
+        tech_obj = next((t for t in techs if t["id"] == tech_id), None)
+        
+        if tech_obj:
+            tech_name = tech_obj["name"]
+            devices = db.get_all_devices()
+            
+            for dev in devices:
+                if dev.get("assigned_tech") == tech_name and dev.get("status") in ["RED", "AMBER", "OFFLINE_NETWORK_DROP"]:
+                    new_tech = auto_assign_technician()
+                    dev["assigned_tech"] = new_tech
+                    db.save_device(dev)
+                    db.log_audit_event(
+                        dev["hostname"], 
+                        "SYSTEM", 
+                        "AUTO_REASSIGN", 
+                        f"Reassigned from {tech_name} ({new_status}) to {new_tech}"
+                    )
+
     return {"status": "SUCCESS"}
 
+# --- Telemetry Ingestion ---
 @app.post("/api/telemetry/heartbeat")
 async def receive_heartbeat(data: dict, authorization: str = Header(None)):
     verify_agent_token(authorization)
@@ -135,13 +178,18 @@ async def receive_heartbeat(data: dict, authorization: str = Header(None)):
     username = data.get("logged_user", "").lower()
     event_state = data.get("event_state", "ACTIVE")
 
-    # Fetch AD Profile baseline
     ad_profile = query_active_directory_ldap(username)
     
-    # 🎯 DYNAMIC OVERRIDE: Prioritize true Full Name fetched directly from local Windows User Account
+    # Prioritize true Full Name & Real Email reported directly by agent
     agent_fullname = data.get("user_full_name")
+    agent_email = data.get("user_email")
+
     if agent_fullname:
         ad_profile["full_name"] = agent_fullname
+    if agent_email:
+        ad_profile["email"] = agent_email
+
+    ad_profile["department"] = resolve_department_from_identity(hostname, username, ad_profile.get("email", ""))
 
     status = calculate_health_status(
         data.get("os_info", {}),
@@ -177,7 +225,7 @@ async def receive_heartbeat(data: dict, authorization: str = Header(None)):
 
     db.save_device(device_payload)
 
-    # 🚨 SMART CRITICAL ALERTING: Non-blocking email alert triggered ONLY on state transition into RED
+    # 🚨 SMART CRITICAL ALERTING
     if status == "RED" and previous_status != "RED":
         pending_updates = data.get("update_info", {}).get("pending_updates_count", 0)
         free_disk = data.get("hardware_info", {}).get("free_disk_gb", "N/A")
@@ -212,6 +260,69 @@ async def get_fleet_devices():
 
     return {"devices": devices}
 
+# --- SLA & Remediation Actions ---
+@app.post("/api/admin/remediate/{hostname}")
+async def remediate_device(hostname: str):
+    devices = {d["hostname"]: d for d in db.get_all_devices()}
+    if hostname in devices:
+        dev = devices[hostname]
+        
+        incident_created_at = dev.get("incident_created_at", 0)
+        resolution_seconds = 0.0
+        if incident_created_at > 0:
+            resolution_seconds = time.time() - incident_created_at
+            assigned_tech = dev.get("assigned_tech", "Unassigned")
+            if assigned_tech != "Unassigned":
+                db.record_remediation_metrics(assigned_tech, resolution_seconds)
+
+        dev["status"] = "GREEN"
+        dev["incident_created_at"] = 0
+        dev["update_info"] = {"pending_updates_count": 0, "reboot_required": False}
+        dev["hardware_info"]["free_disk_gb"] = max(dev["hardware_info"].get("free_disk_gb", 50), 50.0)
+        
+        db.save_device(dev)
+        db.log_audit_event(hostname, "TECH", "REMEDIATED", f"Issue marked resolved. SLA time: {round(resolution_seconds, 1)}s")
+        return {"status": "SUCCESS"}
+    return JSONResponse({"status": "ERROR", "message": "Host not found"}, status_code=404)
+
+@app.get("/api/analytics/sla")
+async def get_sla_analytics():
+    """Calculates Mean Time to Remediate (MTTR) across all technicians."""
+    techs = db.get_all_techs()
+    total_resolved = sum(t.get("resolved_count", 0) for t in techs)
+    total_time = sum(t.get("total_resolution_time", 0.0) for t in techs)
+    
+    mttr_seconds = round(total_time / total_resolved, 1) if total_resolved > 0 else 0.0
+    return {
+        "total_resolved_incidents": total_resolved,
+        "mean_time_to_remediate_seconds": mttr_seconds,
+        "technician_performance": techs
+    }
+
+# --- Manual Fallback / Edit Endpoint ---
+@app.post("/api/admin/manual-override")
+async def manual_device_override(payload: dict):
+    """Allows admins/techs to manually correct user details or assigned technician."""
+    hostname = payload.get("hostname")
+    if not hostname:
+        return JSONResponse({"status": "ERROR", "message": "Missing hostname"}, status_code=400)
+    
+    devices = {d["hostname"]: d for d in db.get_all_devices()}
+    if hostname in devices:
+        dev = devices[hostname]
+        if "user_full_name" in payload:
+            dev["user_details"]["full_name"] = payload["user_full_name"]
+        if "department" in payload:
+            dev["user_details"]["department"] = payload["department"]
+        if "assigned_tech" in payload:
+            dev["assigned_tech"] = payload["assigned_tech"]
+            
+        db.save_device(dev)
+        db.log_audit_event(hostname, "ADMIN", "MANUAL_OVERRIDE", f"Updated details for {hostname}")
+        return {"status": "SUCCESS"}
+    return JSONResponse({"status": "ERROR", "message": "Device not found"}, status_code=404)
+
+# --- Admin & Remote Commands ---
 @app.post("/api/admin/reassign")
 async def reassign_machine(payload: dict):
     hostname = payload.get("hostname")
@@ -222,19 +333,6 @@ async def reassign_machine(payload: dict):
         db.log_audit_event(hostname, "ADMIN", "REASSIGN", f"Assigned to {tech_name}")
         return {"status": "SUCCESS"}
     return JSONResponse({"status": "ERROR", "message": "Missing parameters"}, status_code=400)
-
-@app.post("/api/admin/remediate/{hostname}")
-async def remediate_device(hostname: str):
-    devices = {d["hostname"]: d for d in db.get_all_devices()}
-    if hostname in devices:
-        dev = devices[hostname]
-        dev["status"] = "GREEN"
-        dev["update_info"] = {"pending_updates_count": 0, "reboot_required": False}
-        dev["hardware_info"]["free_disk_gb"] = max(dev["hardware_info"].get("free_disk_gb", 50), 50.0)
-        db.save_device(dev)
-        db.log_audit_event(hostname, "TECH", "REMEDIATED", "Marked issue as resolved")
-        return {"status": "SUCCESS"}
-    return JSONResponse({"status": "ERROR", "message": "Host not found"}, status_code=404)
 
 @app.post("/api/admin/command")
 async def queue_admin_command(payload: dict):
@@ -314,48 +412,6 @@ async def populate_mock_fleet():
             "status": "AMBER",
             "event_state": "ACTIVE",
             "assigned_tech": "Sarah Connor",
-            "last_seen": time.time(),
-            "is_mock": True
-        },
-        {
-            "hostname": "SALES-LAPTOP-04",
-            "logged_user": "bmbatha",
-            "user_details": FALLBACK_AD_DIRECTORY["bmbatha"],
-            "os_info": {"product_name": "Windows 11 Pro", "display_version": "23H2", "build_number": "22631"},
-            "update_info": {"pending_updates_count": 0, "reboot_required": False},
-            "hardware_info": {"free_disk_gb": 95.0, "architecture": "x86_64"},
-            "ip_address": "10.14.20.130",
-            "status": "OFFLINE_NETWORK_DROP",
-            "event_state": "UNEXPECTED_DROP",
-            "assigned_tech": "Kevin Vance",
-            "last_seen": time.time() - 300,
-            "is_mock": True
-        },
-        {
-            "hostname": "LOGISTICS-DESK-01",
-            "logged_user": "dchen",
-            "user_details": FALLBACK_AD_DIRECTORY["dchen"],
-            "os_info": {"product_name": "Windows 10 Pro", "display_version": "22H2", "build_number": "19045"},
-            "update_info": {"pending_updates_count": 0, "reboot_required": False},
-            "hardware_info": {"free_disk_gb": 150.0, "architecture": "x86_64"},
-            "ip_address": "10.14.20.145",
-            "status": "OFFLINE_SHUTDOWN",
-            "event_state": "GRACEFUL_SHUTDOWN",
-            "assigned_tech": "Unassigned",
-            "last_seen": time.time() - 1200,
-            "is_mock": True
-        },
-        {
-            "hostname": "HR-LAPTOP-09",
-            "logged_user": "akarr",
-            "user_details": FALLBACK_AD_DIRECTORY["akarr"],
-            "os_info": {"product_name": "Windows 11 Pro", "display_version": "23H2", "build_number": "22631"},
-            "update_info": {"pending_updates_count": 0, "reboot_required": False},
-            "hardware_info": {"free_disk_gb": 115.0, "architecture": "x86_64"},
-            "ip_address": "10.14.20.118",
-            "status": "GREEN",
-            "event_state": "ACTIVE",
-            "assigned_tech": "Unassigned",
             "last_seen": time.time(),
             "is_mock": True
         }
