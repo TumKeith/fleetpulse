@@ -2,7 +2,7 @@
 """
 =============================================================================
  FLEETPULSE ENTERPRISE BACKGROUND AGENT
- Win32 NT Kernel Collector, Dynamic OS Query & Bearer Authenticated Polling
+ Win32 NT Kernel Collector, Dynamic OS Query & True Windows User Profile Tracking
 =============================================================================
 """
 
@@ -24,11 +24,47 @@ BEARER_TOKEN = "Bearer FleetPulse-Enterprise-Key-2026-Secure"
 POLL_INTERVAL_SECONDS = 10
 
 
+def get_logged_in_user_details() -> dict:
+    """
+    Dynamically queries WMI and CIM for the active interactive desktop user 
+    and resolves their true Windows Full Name / Display Name.
+    """
+    username = getpass.getuser().lower()
+    full_name = ""
+
+    # 1. Fetch active interactive user logged into the session
+    try:
+        cmd_user = "powershell -Command \"(Get-CimInstance Win32_ComputerSystem).UserName\""
+        res_user = subprocess.run(cmd_user, shell=True, capture_output=True, text=True, timeout=5)
+        if res_user.returncode == 0 and res_user.stdout.strip():
+            raw_user = res_user.stdout.strip()
+            username = raw_user.split("\\")[-1].lower()
+    except Exception:
+        pass
+
+    # 2. Fetch the true Full Name / Display Name from Windows User Account database
+    try:
+        cmd_fullname = f"powershell -Command \"(Get-CimInstance Win32_UserAccount -Filter \\\"Name='{username}'\\\").FullName\""
+        res_fullname = subprocess.run(cmd_fullname, shell=True, capture_output=True, text=True, timeout=5)
+        if res_fullname.returncode == 0 and res_fullname.stdout.strip():
+            full_name = res_fullname.stdout.strip()
+    except Exception:
+        pass
+
+    # Fallback to capitalized username if Full Name isn't configured in Windows
+    if not full_name:
+        full_name = username.title()
+
+    return {
+        "username": username,
+        "full_name": full_name
+    }
+
+
 def get_accurate_os_info() -> dict:
     """
     Dynamically queries native Win32 NT Kernel APIs and WMI CIM instances 
-    to extract true OS product name, display version, and build number 
-    without relying on compatibility-spoofed registry keys or hardcoded values.
+    to extract true OS product name, display version, and build number.
     """
     try:
         # 1. Read OS Details from Registry as initial baseline
@@ -66,7 +102,7 @@ def get_accurate_os_info() -> dict:
         # 3. If running Windows 11 (Build 22000+) but registry returns legacy string, query CIM directly
         if true_build >= 22000 and "10" in product_name:
             cmd = "powershell -Command \"(Get-CimInstance Win32_OperatingSystem).Caption\""
-            res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
             if res.returncode == 0 and res.stdout.strip():
                 product_name = res.stdout.strip().replace("Microsoft ", "")
 
@@ -84,9 +120,9 @@ def get_accurate_os_info() -> dict:
 
 
 def get_system_telemetry() -> dict:
-    """Collects dynamic endpoint hardware, OS, and update state metrics."""
+    """Collects dynamic endpoint hardware, OS, true user profile, and update state metrics."""
     hostname = socket.gethostname()
-    username = getpass.getuser()
+    user_info = get_logged_in_user_details()
     
     # Query true local network interface IP address
     try:
@@ -109,7 +145,8 @@ def get_system_telemetry() -> dict:
 
     return {
         "hostname": hostname,
-        "logged_user": username,
+        "logged_user": user_info["username"],
+        "user_full_name": user_info["full_name"],
         "ip_address": ip_address,
         "os_info": os_info,
         "update_info": {
@@ -160,7 +197,7 @@ def run_agent_loop():
             
             with urllib.request.urlopen(req) as response:
                 res_data = json.loads(response.read().decode("utf-8"))
-                print(f"[{time.strftime('%H:%M:%S')}] Heartbeat Delivered. Assigned Health: {res_data.get('assigned_health')}")
+                print(f"[{time.strftime('%H:%M:%S')}] Heartbeat Delivered for '{telemetry['user_full_name']}' ({telemetry['logged_user']}). Health: {res_data.get('assigned_health')}")
 
             # Poll for pending administrative remediation commands
             cmd_req = urllib.request.Request(

@@ -135,7 +135,13 @@ async def receive_heartbeat(data: dict, authorization: str = Header(None)):
     username = data.get("logged_user", "").lower()
     event_state = data.get("event_state", "ACTIVE")
 
+    # Fetch AD Profile baseline
     ad_profile = query_active_directory_ldap(username)
+    
+    # 🎯 DYNAMIC OVERRIDE: Prioritize true Full Name fetched directly from local Windows User Account
+    agent_fullname = data.get("user_full_name")
+    if agent_fullname:
+        ad_profile["full_name"] = agent_fullname
 
     status = calculate_health_status(
         data.get("os_info", {}),
