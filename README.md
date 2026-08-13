@@ -3,6 +3,16 @@
 An enterprise-grade **Remote Monitoring & Management (RMM)** and **IT Dispatch Engine** built natively for Windows environments using Python (FastAPI), SQLite, Win32 APIs, and Tailwind CSS. **FleetPulse** provides exception-based fleet triage, real-time threat telemetry, dynamic Win32 user identity resolution, technician shift dispatching, rogue network asset discovery, and automated device isolation.
 
 ---
+## 📸 Visual Platform Tour
+
+### 1. Master SOC Dispatch Console (`/`)
+![Master SOC Dashboard](./assets/soc_dashboard.png)
+
+### 2. Rogue Network Asset Explorer & Threat Isolation
+![Rogue Asset Explorer](./assets/rogue_explorer.png)
+
+### 3. Dedicated Technician Workspace (`/tech`)
+![Technician Portal](./assets/tech_portal.png)
 
 ## 🌟 Key Capabilities
 
