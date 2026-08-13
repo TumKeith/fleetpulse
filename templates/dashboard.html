@@ -21,12 +21,16 @@
                 <h1 class="text-3xl font-extrabold tracking-tight text-white flex items-center gap-3">
                     <i class="fa-solid fa-server text-indigo-500"></i> FLEETPULSE IT DISPATCH PLANE
                 </h1>
-                <p class="text-gray-400 text-sm mt-1">Workload Distribution • Technician Shift Management • Remote Remediation</p>
+                <p class="text-gray-400 text-sm mt-1">Workload Distribution • Threat Telemetry • Remote Remediation</p>
             </div>
             <div class="flex gap-3">
+                <button onclick="openAuditModal()" 
+                        class="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-indigo-400 text-sm font-semibold rounded-lg border border-indigo-500/20 transition flex items-center gap-2">
+                    <i class="fa-solid fa-clock-rotate-left"></i> 📜 Audit Trail
+                </button>
                 <button onclick="fetch('/api/demo/populate-mock', {method:'POST'}).then(() => location.reload())" 
                         class="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-amber-400 text-sm font-semibold rounded-lg border border-amber-500/20 transition flex items-center gap-2">
-                    <i class="fa-solid fa-bolt"></i> Reset / Load Mock Fleet
+                    <i class="fa-solid fa-bolt"></i> Reset / Mock Fleet
                 </button>
                 <button onclick="location.reload()" 
                         class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold rounded-lg shadow-lg transition flex items-center gap-2">
@@ -46,13 +50,11 @@
                     <i class="fa-solid fa-user-plus"></i> + Onboard Tech
                 </button>
             </div>
-
-            <!-- Technician List Container -->
             <div id="techs-container" class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4"></div>
         </div>
 
-        <!-- SLA Performance Banner -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+        <!-- SLA Performance & Interactive Unmanaged Asset Banner -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
             <div class="card-bg p-4 rounded-xl flex items-center justify-between border-l-4 border-indigo-500">
                 <div>
                     <p class="text-xs text-gray-400 uppercase font-semibold">Mean Time to Remediate (MTTR)</p>
@@ -67,19 +69,26 @@
                 </div>
                 <i class="fa-solid fa-circle-check text-3xl text-emerald-500/40"></i>
             </div>
+            <div onclick="openUnmanagedModal()" class="card-bg p-4 rounded-xl flex items-center justify-between border-l-4 border-amber-500 cursor-pointer hover:border-amber-400 hover:bg-gray-800/80 transition">
+                <div>
+                    <p class="text-xs text-amber-400 uppercase font-semibold flex items-center gap-1">
+                        Unmanaged Network Assets <i class="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
+                    </p>
+                    <p id="unmanaged-count" class="text-2xl font-black text-amber-400 mt-1">0 Rogue IPs</p>
+                </div>
+                <i class="fa-solid fa-network-wired text-3xl text-amber-500/40"></i>
+            </div>
         </div>
 
         <!-- Priority Devices Grid -->
         <div class="space-y-6">
-            <!-- Critical Section -->
             <div class="card-bg rounded-xl p-5 border-l-4 border-red-500">
                 <h3 class="text-md font-bold text-red-400 mb-4 flex items-center gap-2">
-                    <i class="fa-solid fa-triangle-exclamation"></i> Priority 1: Critical Issues (Immediate Action Required)
+                    <i class="fa-solid fa-triangle-exclamation"></i> Priority 1: Critical Issues & High Threat Activity
                 </h3>
                 <div id="critical-devices" class="space-y-3"></div>
             </div>
 
-            <!-- Warnings Section -->
             <div class="card-bg rounded-xl p-5 border-l-4 border-amber-500">
                 <h3 class="text-md font-bold text-amber-400 mb-4 flex items-center gap-2">
                     <i class="fa-solid fa-circle-exclamation"></i> Priority 2: Warnings & Pending Updates
@@ -87,7 +96,6 @@
                 <div id="amber-devices" class="space-y-3"></div>
             </div>
 
-            <!-- Compliant Section -->
             <div class="card-bg rounded-xl p-5 border-l-4 border-emerald-500">
                 <h3 class="text-md font-bold text-emerald-400 mb-4 flex items-center gap-2">
                     <i class="fa-solid fa-shield-halved"></i> Priority 3: Healthy Devices & Normal Operations
@@ -97,7 +105,7 @@
         </div>
     </div>
 
-    <!-- SUPER ADMIN DEVICE INSPECT & REMEDIATE MODAL -->
+    <!-- SUPER ADMIN DEVICE INSPECT MODAL -->
     <div id="deviceModal" class="fixed inset-0 modal-bg hidden flex items-center justify-center p-4 z-50">
         <div class="card-bg rounded-xl max-w-2xl w-full p-6 shadow-2xl border border-gray-700">
             <div class="flex justify-between items-center mb-4 border-b border-gray-800 pb-3">
@@ -109,13 +117,11 @@
             </div>
             
             <div class="space-y-4">
-                <!-- Reassignment Row -->
                 <div class="bg-gray-900 p-3 rounded-lg flex justify-between items-center border border-gray-800">
                     <span class="text-xs font-semibold uppercase text-gray-400">Assigned Technician:</span>
                     <select id="modalTechSelect" onchange="reassignDevice(this.value)" class="bg-gray-800 border border-gray-700 text-xs text-white rounded p-1.5 focus:outline-none"></select>
                 </div>
 
-                <!-- Hardware & User Specs -->
                 <div class="grid grid-cols-2 gap-4 text-xs">
                     <div class="bg-gray-900 p-3 rounded-lg border border-gray-800 flex flex-col justify-between">
                         <div>
@@ -123,7 +129,6 @@
                             <p id="modalUser" class="text-white font-semibold"></p>
                             <p id="modalEmail" class="text-gray-300 mt-1 font-mono text-[11px]"></p>
                         </div>
-                        <!-- Direct Comms Buttons -->
                         <div class="flex gap-2 mt-3 pt-2 border-t border-gray-800">
                             <a id="btnEmailUser" href="#" target="_blank" class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-indigo-300 text-xs rounded border border-gray-700 flex items-center gap-1">
                                 <i class="fa-solid fa-envelope"></i> Email User
@@ -134,15 +139,15 @@
                         </div>
                     </div>
                     <div class="bg-gray-900 p-3 rounded-lg border border-gray-800">
-                        <p class="font-bold text-indigo-400 mb-1">System Specs</p>
+                        <p class="font-bold text-indigo-400 mb-1">System & Threat Metrics</p>
                         <p id="modalOs" class="text-white"></p>
+                        <p id="modalCpu" class="text-gray-300 mt-1"></p>
                         <p id="modalDisk" class="text-gray-400 mt-1"></p>
                     </div>
                 </div>
 
-                <!-- Immediate Admin Override Buttons -->
                 <div class="space-y-2 pt-2">
-                    <p class="text-xs font-bold text-gray-400 uppercase">⚡ Super Admin Remediation Commands</p>
+                    <p class="text-xs font-bold text-gray-400 uppercase">⚡ Remote Remediation Commands</p>
                     <div class="grid grid-cols-3 gap-2">
                         <button onclick="sendRemoteCommand('flushdns')" class="p-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-semibold rounded border border-gray-700">🧹 Flush DNS</button>
                         <button onclick="sendRemoteCommand('restart_wuauserv')" class="p-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-semibold rounded border border-gray-700">🔄 Restart WU</button>
@@ -162,6 +167,35 @@
         </div>
     </div>
 
+    <!-- UNMANAGED ASSETS / ROGUE IP MODAL -->
+    <div id="unmanagedModal" class="fixed inset-0 modal-bg hidden flex items-center justify-center p-4 z-50">
+        <div class="card-bg rounded-xl max-w-4xl w-full p-6 shadow-2xl border border-gray-700 max-h-[85vh] flex flex-col">
+            <div class="flex justify-between items-center mb-4 border-b border-gray-800 pb-3">
+                <div>
+                    <h3 class="text-lg font-bold text-amber-400 flex items-center gap-2">
+                        <i class="fa-solid fa-network-wired"></i> Rogue & Unmanaged Network Asset Explorer
+                    </h3>
+                    <p class="text-xs text-gray-400 mt-0.5">Discovered live subnet IPs lacking active FleetPulse agent heartbeats</p>
+                </div>
+                <button onclick="closeUnmanagedModal()" class="text-gray-400 hover:text-white text-2xl">&times;</button>
+            </div>
+            <div id="unmanagedListContainer" class="overflow-y-auto space-y-3 pr-2 flex-1 text-xs"></div>
+        </div>
+    </div>
+
+    <!-- AUDIT TRAIL MODAL -->
+    <div id="auditModal" class="fixed inset-0 modal-bg hidden flex items-center justify-center p-4 z-50">
+        <div class="card-bg rounded-xl max-w-3xl w-full p-6 shadow-2xl border border-gray-700 max-h-[80vh] flex flex-col">
+            <div class="flex justify-between items-center mb-4 border-b border-gray-800 pb-3">
+                <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-clock-rotate-left text-indigo-400"></i> System Audit Trail Logs
+                </h3>
+                <button onclick="closeAuditModal()" class="text-gray-400 hover:text-white text-2xl">&times;</button>
+            </div>
+            <div id="auditLogsContainer" class="overflow-y-auto space-y-2 pr-2 flex-1 text-xs font-mono"></div>
+        </div>
+    </div>
+
     <!-- ADD TECHNICIAN MODAL -->
     <div id="addTechModal" class="fixed inset-0 modal-bg hidden flex items-center justify-center p-4 z-50">
         <div class="card-bg rounded-xl max-w-md w-full p-6 shadow-2xl border border-gray-700">
@@ -171,17 +205,14 @@
                 </h3>
                 <button onclick="closeAddTechModal()" class="text-gray-400 hover:text-white text-lg">&times;</button>
             </div>
-            
             <form id="addTechForm" onsubmit="submitNewTech(event)" class="space-y-4">
                 <div>
                     <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Full Name</label>
-                    <input type="text" id="techName" required placeholder="e.g., Alex Mercer" 
-                           class="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+                    <input type="text" id="techName" required placeholder="e.g., Alex Mercer" class="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
                 </div>
                 <div>
                     <label class="block text-xs font-semibold text-gray-400 uppercase mb-1">Company Email</label>
-                    <input type="email" id="techEmail" required placeholder="e.g., amercer@company.com" 
-                           class="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+                    <input type="email" id="techEmail" required placeholder="e.g., amercer@company.com" class="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
                 </div>
                 <div class="flex justify-end gap-3 pt-3">
                     <button type="button" onclick="closeAddTechModal()" class="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-semibold rounded-lg">Cancel</button>
@@ -191,7 +222,6 @@
         </div>
     </div>
 
-    <!-- SCRIPT SECTION -->
     <script>
         let currentDevice = null;
         let allTechs = [];
@@ -199,6 +229,86 @@
         function openAddTechModal() { document.getElementById('addTechModal').classList.remove('hidden'); }
         function closeAddTechModal() { document.getElementById('addTechModal').classList.add('hidden'); }
         function closeDeviceModal() { document.getElementById('deviceModal').classList.add('hidden'); }
+        function closeAuditModal() { document.getElementById('auditModal').classList.add('hidden'); }
+        function closeUnmanagedModal() { document.getElementById('unmanagedModal').classList.add('hidden'); }
+
+        async function openUnmanagedModal() {
+            const res = await fetch('/api/fleet/unmanaged');
+            const data = await res.json();
+            const container = document.getElementById('unmanagedListContainer');
+            container.innerHTML = '';
+
+            if (data.unmanaged.length === 0) {
+                container.innerHTML = `<div class="p-8 text-center bg-gray-900 rounded-xl text-gray-500">No unmanaged endpoints detected on local subnets!</div>`;
+            } else {
+                data.unmanaged.forEach(u => {
+                    container.innerHTML += `
+                        <div class="bg-gray-900 p-3.5 rounded-lg border border-gray-800 flex justify-between items-center">
+                            <div>
+                                <p class="font-bold text-white text-sm">${u.ip_address} <span class="text-xs font-normal text-gray-400">(${u.mac_address})</span></p>
+                                <p class="text-xs text-amber-400 mt-0.5">• Vendor: ${u.vendor} | Service: ${u.detected_service}</p>
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="whitelistDevice('${u.ip_address}')" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-emerald-400 text-xs font-semibold rounded border border-gray-700 flex items-center gap-1">
+                                    <i class="fa-solid fa-tag"></i> Tag Authorized
+                                </button>
+                                <button onclick="blacklistDevice('${u.ip_address}')" class="px-3 py-1.5 bg-red-900/40 hover:bg-red-800/60 text-red-300 text-xs font-semibold rounded border border-red-700/50 flex items-center gap-1">
+                                    <i class="fa-solid fa-ban"></i> Blacklist & Isolate
+                                </button>
+                                <button onclick="alert('Deployment payload queued via WinRM for ${u.ip_address}')" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded shadow flex items-center gap-1">
+                                    <i class="fa-solid fa-rocket"></i> Deploy Agent
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+            document.getElementById('unmanagedModal').classList.remove('hidden');
+        }
+
+        async function whitelistDevice(ip) {
+            await fetch('/api/admin/unmanaged/whitelist', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip })
+            });
+            openUnmanagedModal();
+            loadFleetData();
+        }
+
+        async function blacklistDevice(ip) {
+            if (confirm(`Are you sure you want to blacklist and sever network connectivity for ${ip}?`)) {
+                await fetch('/api/admin/unmanaged/blacklist', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ip })
+                });
+                openUnmanagedModal();
+                loadFleetData();
+            }
+        }
+
+        async function openAuditModal() {
+            const res = await fetch('/api/admin/audit-logs');
+            const data = await res.json();
+            const container = document.getElementById('auditLogsContainer');
+            container.innerHTML = '';
+
+            data.logs.forEach(l => {
+                const dateStr = new Date(l.timestamp * 1000).toLocaleTimeString();
+                container.innerHTML += `
+                    <div class="bg-gray-900 p-2.5 rounded border border-gray-800 flex justify-between items-center">
+                        <div>
+                            <span class="text-indigo-400 font-bold">[${l.actor}]</span>
+                            <span class="text-gray-200 ml-2">${l.action}</span>
+                            <span class="text-gray-400 ml-2">(${l.hostname}): ${l.details}</span>
+                        </div>
+                        <span class="text-gray-500 text-[10px]">${dateStr}</span>
+                    </div>
+                `;
+            });
+            document.getElementById('auditModal').classList.remove('hidden');
+        }
 
         async function submitNewTech(e) {
             e.preventDefault();
@@ -233,12 +343,15 @@
             currentDevice = device;
             const userFull = device.user_details.full_name || device.logged_user || 'Unassigned';
             const userEmail = device.user_details.email || `${device.logged_user || 'user'}@company.com`;
+            const cpu = device.hardware_info.cpu_percent || 0.0;
+            const ram = device.hardware_info.ram_percent || 0.0;
 
             document.getElementById('modalHostname').innerHTML = `<i class="fa-solid fa-desktop text-indigo-400"></i> ${device.hostname}`;
             document.getElementById('modalIp').innerText = `IP Address: ${device.ip_address}`;
             document.getElementById('modalUser').innerText = `Owner: ${userFull}`;
             document.getElementById('modalEmail').innerText = `Email: ${userEmail}`;
             document.getElementById('modalOs').innerText = `OS: ${device.os_info.product_name || 'Windows'}`;
+            document.getElementById('modalCpu').innerHTML = `CPU Load: <span class="font-bold ${cpu > 90 ? 'text-red-400' : 'text-emerald-400'}">${cpu}%</span> | RAM: <span class="font-bold text-gray-200">${ram}%</span>`;
             document.getElementById('modalDisk').innerText = `Free Disk: ${device.hardware_info.free_disk_gb || 'N/A'} GB`;
 
             document.getElementById('btnEmailUser').href = `mailto:${userEmail}?subject=FleetPulse%20IT%20Support%20-%20${device.hostname}`;
@@ -317,6 +430,10 @@
             document.getElementById('sla-mttr').innerText = slaData.mean_time_to_remediate_seconds + "s";
             document.getElementById('sla-resolved').innerText = slaData.total_resolved_incidents;
 
+            const unmanagedRes = await fetch('/api/fleet/unmanaged');
+            const unmanagedData = await unmanagedRes.json();
+            document.getElementById('unmanaged-count').innerText = unmanagedData.unmanaged.length + " Rogue IPs";
+
             const devRes = await fetch('/api/fleet/devices');
             const devData = await devRes.json();
 
@@ -329,6 +446,7 @@
             devData.devices.forEach(d => {
                 const userFull = d.user_details.full_name || d.logged_user || 'Unassigned';
                 const userEmail = d.user_details.email || `${d.logged_user || 'user'}@company.com`;
+                const cpu = d.hardware_info.cpu_percent || 0.0;
                 const dStr = JSON.stringify(d).replace(/"/g, '&quot;');
 
                 const html = `
@@ -336,6 +454,7 @@
                         <div>
                             <span class="font-bold text-white">${d.hostname}</span>
                             <span class="text-xs text-gray-400 ml-2">(${d.ip_address}) • ${userFull} &lt;${userEmail}&gt;</span>
+                            <span class="text-xs ml-3 ${cpu > 90 ? 'text-red-400 font-bold' : 'text-indigo-400'}">CPU: ${cpu}%</span>
                             <span class="text-xs text-indigo-400 ml-3">Assigned: ${d.assigned_tech}</span>
                         </div>
                         <div class="flex items-center gap-2">

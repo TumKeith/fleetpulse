@@ -2,7 +2,7 @@
 """
 =============================================================================
  FLEETPULSE ENTERPRISE BACKGROUND AGENT
- Win32 NT Kernel Collector, Dynamic OS Query & Pure Win32 Registry Email Extractor
+ Win32 NT Kernel Collector, Dynamic OS Query, Win32 Email & CPU/RAM Telemetry
 =============================================================================
 """
 
@@ -52,7 +52,7 @@ def get_logged_in_user_details() -> dict:
     except Exception:
         pass
 
-    # 3. 🎯 NATIVE WINREG EMAIL EXTRACTOR (Scans HKEY_USERS directly for IdentityCRL keys)
+    # 3. NATIVE WINREG EMAIL EXTRACTOR
     try:
         hk_users = winreg.ConnectRegistry(None, winreg.HKEY_USERS)
         index = 0
@@ -148,7 +148,7 @@ def get_accurate_os_info() -> dict:
 
 
 def get_system_telemetry() -> dict:
-    """Collects dynamic endpoint hardware, OS, true user profile, email, and update state metrics."""
+    """Collects dynamic endpoint hardware, OS, user profile, CPU/RAM, and update state metrics."""
     hostname = socket.gethostname()
     user_info = get_logged_in_user_details()
     
@@ -162,12 +162,45 @@ def get_system_telemetry() -> dict:
 
     os_info = get_accurate_os_info()
 
+    # Disk Space
     try:
         import shutil
         total, used, free = shutil.disk_usage("C:\\")
         free_gb = round(free / (1024 ** 3), 2)
     except Exception:
         free_gb = 50.0
+
+    # ⚡ Native RAM Load via Win32 GlobalMemoryStatusEx
+    ram_usage_pct = 0.0
+    try:
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ('dwLength', ctypes.c_ulong),
+                ('dwMemoryLoad', ctypes.c_ulong),
+                ('ullTotalPhys', ctypes.c_ulonglong),
+                ('ullAvailPhys', ctypes.c_ulonglong),
+                ('ullTotalPageFile', ctypes.c_ulonglong),
+                ('ullAvailPageFile', ctypes.c_ulonglong),
+                ('ullTotalVirtual', ctypes.c_ulonglong),
+                ('ullAvailVirtual', ctypes.c_ulonglong),
+                ('ullAvailExtendedVirtual', ctypes.c_ulonglong),
+            ]
+        mem = MEMORYSTATUSEX()
+        mem.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem))
+        ram_usage_pct = float(mem.dwMemoryLoad)
+    except Exception:
+        pass
+
+    # ⚡ Lightweight CPU Load via CIM Query
+    cpu_usage_pct = 0.0
+    try:
+        cmd_cpu = "powershell -Command \"(Get-CimInstance Win32_Processor).LoadPercentage\""
+        res_cpu = subprocess.run(cmd_cpu, shell=True, capture_output=True, text=True, timeout=3)
+        if res_cpu.returncode == 0 and res_cpu.stdout.strip():
+            cpu_usage_pct = float(res_cpu.stdout.strip().splitlines()[0])
+    except Exception:
+        pass
 
     return {
         "hostname": hostname,
@@ -182,6 +215,8 @@ def get_system_telemetry() -> dict:
         },
         "hardware_info": {
             "free_disk_gb": free_gb,
+            "cpu_percent": cpu_usage_pct,
+            "ram_percent": ram_usage_pct,
             "architecture": platform.machine()
         },
         "event_state": "ACTIVE"
@@ -226,7 +261,6 @@ def run_agent_loop():
                 res_data = json.loads(response.read().decode("utf-8"))
                 print(f"[{time.strftime('%H:%M:%S')}] Heartbeat Delivered for '{telemetry['user_full_name']}' ({telemetry['user_email'] or telemetry['logged_user']}). Health: {res_data.get('assigned_health')}")
 
-            # Poll for pending administrative remediation commands
             cmd_req = urllib.request.Request(
                 f"{SERVER_URL}/api/agent/commands/{telemetry['hostname']}",
                 headers={"Authorization": BEARER_TOKEN},
