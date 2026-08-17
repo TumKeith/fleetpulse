@@ -191,11 +191,14 @@
                             </div>
                         </div>
 
-                        <!-- Instant Remediation Bar -->
+                        <!-- Instant Remediation & Remote Desktop Bar -->
                         <div class="pt-2 flex justify-between items-center border-t border-gray-800">
                             <div class="flex gap-2">
                                 <button onclick="sendCmd('${d.hostname}', 'flushdns')" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-xs font-semibold text-gray-200 rounded border border-gray-700">🧹 Flush DNS</button>
                                 <button onclick="sendCmd('${d.hostname}', 'restart_wuauserv')" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-xs font-semibold text-gray-200 rounded border border-gray-700">🔄 Restart WU</button>
+                                <button onclick="launchRemoteRDP('${d.ip_address}')" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded shadow flex items-center gap-1">
+                                    <i class="fa-solid fa-desktop"></i> Launch RDP Session
+                                </button>
                             </div>
                             <button onclick="remediate('${d.hostname}')" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded shadow flex items-center gap-1">
                                 <i class="fa-solid fa-check"></i> Mark Remediated
@@ -203,6 +206,14 @@
                         </div>
                     </div>
                 `;
+            });
+        }
+
+        async function launchRemoteRDP(ip) {
+            await fetch('/api/admin/launch-rdp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip })
             });
         }
 
